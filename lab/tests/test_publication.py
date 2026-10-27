@@ -1,3 +1,4 @@
+from lab.models import Course
 from datetime import timedelta
 
 from django.contrib.auth.models import Group, User
@@ -14,10 +15,13 @@ class PublicationTests(TestCase):
         self.teacher = User.objects.create_user("teacher", is_staff=True)
         self.student = User.objects.create_user("student")
         self.group = Group.objects.create(name="Students")
+        self.course = Course.objects.create(title="Course")
+        self.course.teachers.add(self.teacher)
+        self.course.groups.add(self.group)
         self.student.groups.add(self.group)
-        self.problem = Problem.objects.create(title="Sum", statement="Add two numbers.")
+        self.problem = Problem.objects.create(course=self.course, title="Sum", statement="Add two numbers.")
         now = timezone.now()
-        self.work = Assessment.objects.create(
+        self.work = Assessment.objects.create(course=self.course,
             title="Publication test", opens_at=now - timedelta(hours=1),
             closes_at=now + timedelta(hours=1),
         )
@@ -30,6 +34,7 @@ class PublicationTests(TestCase):
         closes = timezone.localtime(self.work.closes_at)
         return {
             "title": self.work.title,
+            "course": str(self.course.pk),
             "kind": "lab",
             "groups": [self.group.pk],
             "opens_at_0": opens.strftime("%Y-%m-%d"),

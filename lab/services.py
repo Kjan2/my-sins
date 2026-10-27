@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from .models import Assessment, AssessmentVersion, Attempt, DeadlineExtension, Draft, Submission, TheoryAnswer, GradeChange
 from .validators import validate_utf8_size
+from .permissions import can_manage_course, require_course
 
 
 class Closed(ValidationError):
@@ -43,13 +44,18 @@ def teacher(user):
         raise PermissionDenied
 
 
-def enrolled(user, snapshot):
-    return user.is_authenticated and user.is_active and (user.is_staff or user.groups.filter(pk__in=snapshot["group_ids"]).exists())
+def enrolled(user, snapshot, course_id):
+    if not user.is_authenticated or not user.is_active:
+        return False
+    if user.is_staff:
+        return can_manage_course(user, course_id)
+    return user.groups.filter(pk__in=snapshot["group_ids"]).exists()
 
 
 def accessible_attempt(user, pk):
     attempt = Attempt.objects.select_related("version", "assessment", "student").get(pk=pk)
-    if attempt.student_id != user.pk and not user.is_staff:
+    if not user.is_active or (attempt.student_id != user.pk and
+            not can_manage_course(user, attempt.assessment.course_id)):
         raise PermissionDenied
     return attempt
 
@@ -65,6 +71,8 @@ def mutable_attempt(user, pk):
 
 def make_snapshot(assessment):
     assessment.full_clean()
+    if assessment.groups.exclude(pk__in=assessment.course.groups.values("pk")).exists():
+        raise ValidationError("Все группы работы должны принадлежать её курсу.")
     problems = []
     for rule in assessment.problem_rules.select_related("problem").prefetch_related("problem__tests"):
         rule.full_clean()
@@ -110,6 +118,7 @@ def make_snapshot(assessment):
 def publish_assessment(actor, assessment_id):
     teacher(actor)
     assessment = Assessment.objects.get(pk=assessment_id)
+    require_course(actor, assessment.course_id)
     snapshot = make_snapshot(assessment)
     last = assessment.versions.order_by("-number").first()
     version = AssessmentVersion.objects.create(assessment=assessment, number=last.number + 1 if last else 1, snapshot=snapshot, published_by=actor)
@@ -126,7 +135,7 @@ def start_attempt(user, assessment_id):
         return old
     assessment = Assessment.objects.select_related("current_version").get(pk=assessment_id, current_version__isnull=False)
     snapshot = assessment.current_version.snapshot
-    if not enrolled(user, snapshot):
+    if not enrolled(user, snapshot, assessment.course_id):
         raise PermissionDenied
     now = timezone.now()
     closes = parse_datetime(snapshot["closes_at"])
@@ -285,6 +294,7 @@ def finish_attempt(user, attempt_id, drafts, answers, *, check_revisions=False):
 def extend_deadline(actor, attempt_id, new_deadline, reason):
     teacher(actor)
     attempt = Attempt.objects.get(pk=attempt_id)
+    require_course(actor, attempt.assessment.course_id)
     if attempt.finished_at:
         raise ValidationError("Нельзя продлить досрочно завершенную работу.")
     if new_deadline <= attempt.deadline or new_deadline <= timezone.now() or not reason.strip():
@@ -299,6 +309,7 @@ def extend_deadline(actor, attempt_id, new_deadline, reason):
 def grade_answer(actor, answer_id, score, feedback, expected_updated_at=None):
     teacher(actor)
     answer = TheoryAnswer.objects.select_related("attempt__version").get(pk=answer_id)
+    require_course(actor, answer.attempt.assessment.course_id)
     if expected_updated_at and answer.updated_at != expected_updated_at:
         raise ValidationError("Студент изменил ответ. Обновите страницу перед оценкой.")
     previous_score, previous_feedback = answer.score, answer.feedback
@@ -354,6 +365,7 @@ def claim_submission():
 def requeue_submission(actor, submission_id):
     teacher(actor)
     item = Submission.objects.get(pk=submission_id)
+    require_course(actor, item.attempt.assessment.course_id)
     if item.status != "infra_error":
         raise ValidationError("Повторная проверка доступна только после ошибки инфраструктуры.")
     if Submission.objects.filter(attempt__student_id=item.attempt.student_id, status__in=["queued", "running"]).count() >= 3:

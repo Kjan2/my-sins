@@ -7,6 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 from .models import Problem, ReferenceCheck
 from .services import teacher
+from .permissions import require_course
 
 
 def reference_payload(problem, tests=None):
@@ -23,6 +24,7 @@ def reference_fingerprint(payload):
 def queue_reference_check(actor, problem_id):
     teacher(actor)
     problem = Problem.objects.get(pk=problem_id)
+    require_course(actor, problem.course_id)
     problem.full_clean()
     if not problem.reference_source.strip():
         raise ValidationError("Заполните эталонное решение.")

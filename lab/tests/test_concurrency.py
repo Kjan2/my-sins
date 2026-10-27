@@ -1,3 +1,4 @@
+from lab.models import Course
 """Run on a file-backed test DB; in-memory SQLite does not honor lock waits identically."""
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
@@ -21,10 +22,13 @@ class ConcurrentWorkflowTests(TransactionTestCase):
             self.skipTest("Set TEST_DATABASE_PATH=/tmp/contest-tests.sqlite3 for real SQLite concurrency")
         self.teacher=User.objects.create_user("teacher",is_staff=True)
         self.group=Group.objects.create(name="group")
-        self.problem=Problem.objects.create(title="sum",statement="sum")
+        self.course = Course.objects.create(title="Course")
+        self.course.teachers.add(self.teacher)
+        self.course.groups.add(self.group)
+        self.problem=Problem.objects.create(course=self.course, title="sum",statement="sum")
         TestCase.objects.create(problem=self.problem,label="hidden",expected="0")
         now=timezone.now()
-        self.work=Assessment.objects.create(title="load",opens_at=now-timedelta(hours=1),closes_at=now+timedelta(hours=1))
+        self.work=Assessment.objects.create(course=self.course, title="load",opens_at=now-timedelta(hours=1),closes_at=now+timedelta(hours=1))
         self.work.groups.add(self.group)
         AssessmentProblem.objects.create(assessment=self.work,problem=self.problem)
         publish_assessment(self.teacher,self.work.pk)

@@ -1,3 +1,4 @@
+from lab.models import Course
 from datetime import timedelta
 from io import StringIO
 import tempfile
@@ -22,10 +23,13 @@ class WorkerTests(TransactionTestCase):
         self.addCleanup(self.settings_override.disable)
         user=User.objects.create_user("student",is_staff=True)
         group=Group.objects.create(name="group")
-        p=Problem.objects.create(title="p",statement="s")
+        self.course = Course.objects.create(title="Course")
+        self.course.teachers.add(user)
+        self.course.groups.add(group)
+        p=Problem.objects.create(course=self.course, title="p",statement="s")
         TestCase.objects.create(problem=p,label="hidden",expected="0")
         now=timezone.now()
-        work=Assessment.objects.create(title="work",opens_at=now-timedelta(hours=1),closes_at=now+timedelta(hours=1))
+        work=Assessment.objects.create(course=self.course, title="work",opens_at=now-timedelta(hours=1),closes_at=now+timedelta(hours=1))
         work.groups.add(group)
         AssessmentProblem.objects.create(assessment=work,problem=p)
         services.publish_assessment(user,work.pk)

@@ -77,16 +77,16 @@ def expected_revision(data):
 def dashboard(request):
     attempts = {a.assessment_id: a for a in Attempt.objects.filter(student=request.user).select_related("version")}
     rows = []
-    for work in Assessment.objects.select_related("current_version").order_by("-pk"):
+    for work in Assessment.objects.select_related("current_version", "course").order_by("-pk"):
         old = attempts.get(work.pk)
         version = old.version if old else work.current_version
-        if not version or (not old and not services.enrolled(request.user, version.snapshot)):
+        if not version or (not old and not services.enrolled(request.user, version.snapshot, work.course_id)):
             continue
         s = version.snapshot
         now = timezone.now()
         available = parse_datetime(s["opens_at"]) <= now < parse_datetime(s["closes_at"])
         status = ("Завершена" if old.finished_at else "Срок истёк" if now >= old.deadline else "В работе") if old else ("Можно начать" if available else "Ещё не открыта" if now < parse_datetime(s["opens_at"]) else "Закрыта")
-        rows.append({"id": work.pk, "title": s["title"], "kind": "Зачёт" if s["kind"] == "exam" else "Лабораторная", "opens_at": parse_datetime(s["opens_at"]), "closes_at": parse_datetime(s["closes_at"]), "attempt": old, "available": available, "status": status})
+        rows.append({"id": work.pk, "title": s["title"], "course": work.course.title, "kind": "Зачёт" if s["kind"] == "exam" else "Лабораторная", "opens_at": parse_datetime(s["opens_at"]), "closes_at": parse_datetime(s["closes_at"]), "attempt": old, "available": available, "status": status})
     return render(request, "lab/dashboard.html", {"rows": rows})
 
 
@@ -97,7 +97,7 @@ def rules(request, pk):
     if old:
         return redirect("attempt", pk=old.pk)
     s = work.current_version.snapshot
-    if not services.enrolled(request.user, s):
+    if not services.enrolled(request.user, s, work.course_id):
         from django.core.exceptions import PermissionDenied
         raise PermissionDenied
     return render(request, "lab/rules.html", {"work_id": work.pk, "title": s["title"], "instructions": s["instructions"], "duration": s["duration_minutes"], "opens_at": parse_datetime(s["opens_at"]), "closes_at": parse_datetime(s["closes_at"]), "pass_score": s["pass_score"], "limit": s["submission_limit"], "deferred": s["reveal_after_close"], "version": work.current_version.number})

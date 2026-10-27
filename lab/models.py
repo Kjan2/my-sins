@@ -8,7 +8,22 @@ from django.utils import timezone
 from .validators import validate_utf8_size
 
 
+class Course(models.Model):
+    title = models.CharField("Название", max_length=200)
+    teachers = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name="teaching_courses",
+        verbose_name="Преподаватели", limit_choices_to={"is_staff": True, "is_active": True})
+    groups = models.ManyToManyField(Group, related_name="courses", verbose_name="Учебные группы", blank=True)
+
+    class Meta:
+        verbose_name = "Курс"
+        verbose_name_plural = "Курсы"
+
+    def __str__(self):
+        return self.title
+
+
 class Problem(models.Model):
+    course = models.ForeignKey(Course, on_delete=models.PROTECT, related_name="problems", verbose_name="Курс")
     class Format(models.TextChoices):
         PLAIN = "plain", "Обычный текст"
         MARKDOWN = "markdown", "Markdown"
@@ -49,6 +64,7 @@ class TestCase(models.Model):
 
 
 class Assessment(models.Model):
+    course = models.ForeignKey(Course, on_delete=models.PROTECT, related_name="assessments", verbose_name="Курс")
     class Kind(models.TextChoices):
         LAB = "lab", "Лабораторная"
         EXAM = "exam", "Зачёт"
@@ -83,6 +99,10 @@ class AssessmentProblem(models.Model):
     required = models.BooleanField("Обязательная", default=True)
     order = models.PositiveIntegerField("Порядок", default=0)
 
+    def clean(self):
+        if self.assessment_id and self.problem_id and self.assessment.course_id != self.problem.course_id:
+            raise ValidationError({"problem": "Задача должна принадлежать курсу работы."})
+
     class Meta:
         ordering = ["order", "pk"]
         constraints = [models.UniqueConstraint(fields=["assessment", "problem"], name="unique_assessment_problem")]
@@ -96,6 +116,8 @@ class TheoryQuestion(models.Model):
     source = models.CharField("Источник", max_length=100, default="teacher")
 
     def clean(self):
+        if self.problem_id and self.assessment_id and self.problem.course_id != self.assessment.course_id:
+            raise ValidationError({"problem": "Задача должна принадлежать курсу работы."})
         if self.problem_id and self.assessment_id and not self.assessment.problems.filter(pk=self.problem_id).exists():
             raise ValidationError("Связанная задача должна входить в работу. Сначала сохраните состав задач.")
 

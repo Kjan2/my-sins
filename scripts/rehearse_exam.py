@@ -121,15 +121,18 @@ def main():
         from io import StringIO
         from django.utils import timezone
         from lab import services
-        from lab.models import Assessment, AssessmentProblem, Attempt, Problem, Submission, TestCase, TheoryAnswer, TheoryQuestion
+        from lab.models import Course, Assessment, AssessmentProblem, Attempt, Problem, Submission, TestCase, TheoryAnswer, TheoryQuestion
         password = secrets.token_urlsafe(24)
         teacher = User.objects.create_user("rehearsal-teacher", password=password, is_staff=True)
         group = Group.objects.create(name="Rehearsal")
+        course = Course.objects.create(title="Rehearsal course")
+        course.teachers.add(teacher)
+        course.groups.add(group)
         usernames = [f"rehearsal-{index}" for index in range(args.students + int(args.browser))]
         for username in usernames:
             user = User.objects.create_user(username, password=password)
             user.groups.add(group)
-        problem = Problem(title=workload["title"], statement=workload["statement"], starter_code="int main(){}",
+        problem = Problem(course=course, title=workload["title"], statement=workload["statement"], starter_code="int main(){}",
             reference_source=source, time_limit=workload.get("time_limit", 2), memory_mb=workload.get("memory_mb", 128))
         problem.full_clean()
         problem.save()
@@ -145,7 +148,7 @@ def main():
         if reference.status != "accepted":
             raise RuntimeError(f"Reference solution failed: {reference.status}")
         now = timezone.now()
-        work = Assessment.objects.create(title="Disposable rehearsal", kind="exam", opens_at=now-timedelta(minutes=1),
+        work = Assessment.objects.create(course=course, title="Disposable rehearsal", kind="exam", opens_at=now-timedelta(minutes=1),
                                          closes_at=now+timedelta(hours=2), duration_minutes=60, pass_score=12)
         work.groups.add(group)
         AssessmentProblem.objects.create(assessment=work, problem=problem, max_score=10)

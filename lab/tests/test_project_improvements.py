@@ -110,9 +110,9 @@ class ImprovementTests(TestCase):
         valid = "username,password,group,first_name\nnew-one,Z7!mR4@qT9#vL2,New group,Имя\n"
         invalid = valid + "student,Z7!mR4@qT9#vL2,New group,Existing\n"
         with self.assertRaises(ValidationError):
-            import_students(self.teacher, invalid.encode())
+            import_students(self.teacher, invalid.encode(), self.course.pk)
         self.assertFalse(User.objects.filter(username="new-one").exists())
-        self.assertEqual(import_students(self.teacher, valid.encode("utf-8-sig")), 1)
+        self.assertEqual(import_students(self.teacher, valid.encode("utf-8-sig"), self.course.pk), 1)
         user = User.objects.get(username="new-one")
         self.assertTrue(user.check_password("Z7!mR4@qT9#vL2"))
         self.assertFalse(user.is_staff or user.is_superuser)
@@ -121,19 +121,19 @@ class ImprovementTests(TestCase):
     def test_import_rejects_bad_files_and_student_access(self):
         from django.core.exceptions import PermissionDenied
         with self.assertRaises(PermissionDenied):
-            import_students(self.student, b"")
+            import_students(self.student, b"", self.course.pk)
         for content in (b"\xff", b"username,password,group\na,x,g,extra", b"username,password,group\na,123,g", b"username,password,group,group\na,x,g,g"):
             with self.subTest(content=content), self.assertRaises(ValidationError):
-                import_students(self.teacher, content)
+                import_students(self.teacher, content, self.course.pk)
         normalized_duplicates = "username,password,group\nAlice,Z7!mR4@qT9#vL2,Group\nＡlice,Z7!mR4@qT9#vL2,Group\n"
         with self.assertRaises(ValidationError):
-            import_students(self.teacher, normalized_duplicates.encode())
+            import_students(self.teacher, normalized_duplicates.encode(), self.course.pk)
         self.assertFalse(User.objects.filter(username="Alice").exists())
         self.assertEqual(self.client.get("/teacher/students/import/").status_code, 403)
         self.client.force_login(self.teacher)
-        response = self.client.post("/teacher/students/import/", {"file": SimpleUploadedFile("students.csv", b"bad")})
+        response = self.client.post("/teacher/students/import/", {"course": self.course.pk, "file": SimpleUploadedFile("students.csv", b"bad")})
         self.assertEqual(response.status_code, 400)
-        response = self.client.post("/teacher/students/import/", {"file": SimpleUploadedFile("students.csv",
+        response = self.client.post("/teacher/students/import/", {"course": self.course.pk, "file": SimpleUploadedFile("students.csv",
             b"username,password,group\nimported-user,Z7!mR4@qT9#vL2,Imported group\n")})
         self.assertEqual(response.status_code, 302)
         self.assertTrue(User.objects.filter(username="imported-user", is_staff=False).exists())

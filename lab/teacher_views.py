@@ -6,7 +6,6 @@ from django import forms
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
 from django.db.models import Count, Prefetch
 from django.http import Http404, HttpResponse, JsonResponse
@@ -14,7 +13,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 from . import services
-from .models import Assessment, Attempt, Submission, TheoryAnswer, WorkerState
+from .models import Assessment, Attempt, Course, Submission, TheoryAnswer, WorkerState
+from .permissions import courses_for, scoped
 
 
 def teacher_required(view):
@@ -51,16 +51,21 @@ class ExtensionForm(forms.Form):
 
 
 class StudentImportForm(forms.Form):
+    course = forms.ModelChoiceField(label="Курс", queryset=Course.objects.none())
     file = forms.FileField(label="CSV UTF-8", help_text="До 200 новых студентов, 1 МиБ; разделитель — запятая.")
+
+    def __init__(self, *args, user, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["course"].queryset = courses_for(user)
 
 
 @teacher_required
 def import_students(request):
     from .student_import import import_students as save_students
-    form = StudentImportForm(request.POST or None, request.FILES or None)
+    form = StudentImportForm(request.POST or None, request.FILES or None, user=request.user)
     if request.method == "POST" and form.is_valid():
         try:
-            count = save_students(request.user, form.cleaned_data["file"].read(1048577))
+            count = save_students(request.user, form.cleaned_data["file"].read(1048577), form.cleaned_data["course"].pk)
         except ValidationError as exc:
             form.add_error(None, exc)
         else:
@@ -94,13 +99,21 @@ def gradebook_csv(work, version, rows):
 
 @teacher_required
 def dashboard(request):
-    works = Assessment.objects.select_related("current_version").annotate(attempt_count=Count("attempts")).order_by("-pk")
-    return render(request, "teacher/dashboard.html", {"works": works})
+    courses = courses_for(request.user).order_by("title", "pk")
+    selected = request.GET.get("course", "")
+    works = scoped(request.user, Assessment.objects.all()).select_related("current_version", "course")
+    if selected:
+        course = get_object_or_404(courses, pk=selected) if selected.isdecimal() and len(selected) <= 19 else None
+        if course is None:
+            raise Http404
+        works = works.filter(course=course)
+    works = works.annotate(attempt_count=Count("attempts")).order_by("-pk")
+    return render(request, "teacher/dashboard.html", {"works": works, "courses": courses, "course_id": selected})
 
 
 @teacher_required
 def gradebook(request, pk):
-    work = get_object_or_404(Assessment.objects.select_related("current_version"), pk=pk)
+    work = get_object_or_404(scoped(request.user, Assessment.objects.select_related("current_version")), pk=pk)
     versions = list(work.versions.order_by("-number"))
     selected = request.GET.get("version")
     version = next((v for v in versions if str(v.pk) == selected), None) if selected else work.current_version
@@ -109,7 +122,7 @@ def gradebook(request, pk):
     group_id = request.GET.get("group", "")
     if group_id and (not group_id.isdecimal() or len(group_id) > 19 or
                      not 0 < int(group_id) <= 9223372036854775807 or
-                     not Group.objects.filter(pk=group_id).exists()):
+                     not work.course.groups.filter(pk=group_id).exists()):
         raise Http404
     rows = []
     if version:
@@ -135,12 +148,13 @@ def gradebook(request, pk):
     if request.GET.get("format") == "csv":
         return gradebook_csv(work, version, rows)
     return render(request, "teacher/gradebook.html", {"work": work, "versions": versions, "version": version,
-                  "groups": Group.objects.order_by("name"), "group_id": group_id, "rows": rows})
+                  "groups": work.course.groups.order_by("name"), "group_id": group_id, "rows": rows})
 
 
 @teacher_required
 def attempt(request, pk):
-    item = get_object_or_404(Attempt.objects.select_related("student", "version", "assessment"), pk=pk)
+    item = get_object_or_404(scoped(request.user,
+        Attempt.objects.select_related("student", "version", "assessment"), "assessment__course"), pk=pk)
     answers = {a.question_id: a for a in item.answers.select_related("submission", "graded_by").prefetch_related("grade_changes__actor")}
     extension_form = ExtensionForm(request.POST if request.method == "POST" and request.POST.get("action") == "extend" else None)
     error_status = 200
@@ -182,13 +196,23 @@ def attempt(request, pk):
                   "submissions": item.submissions.defer("source", "result", "custom_input").order_by("-pk")[:50]}, status=error_status)
 
 
-def judge_data():
+def judge_data(user=None):
     now = timezone.now()
     worker = WorkerState.objects.first()
     fresh = bool(worker and (now - worker.heartbeat_at).total_seconds() <= 30)
     labels = {"starting": "Запускается", "idle": "Ожидает задания", "running": "Проверяет", "stopped": "Остановлен", "error": "Остановлен с ошибкой"}
-    oldest = Submission.objects.filter(status="queued").order_by("created_at").values_list("created_at", flat=True).first()
-    errors = Submission.objects.filter(status="infra_error").select_related("attempt__student").defer("source", "result", "custom_input").order_by("-finished_at", "-pk")[:20]
+    submissions = Submission.objects.all()
+    if user is not None:
+        submissions = scoped(user, submissions, "attempt__assessment__course")
+    oldest = submissions.filter(status="queued").order_by("created_at").values_list("created_at", flat=True).first()
+    errors = submissions.filter(status="infra_error").select_related("attempt__student").defer("source", "result", "custom_input").order_by("-finished_at", "-pk")[:20]
+    current = worker.current_submission_id if worker else None
+    if current and user is not None and not submissions.filter(pk=current).exists():
+        current = None
+    message = worker.message if worker else "Worker ещё не запускался."
+    if worker and worker.status == "running" and user is not None and not user.is_superuser:
+        # Reference-check messages contain a private problem ID; worker state is shared.
+        message = "Выполняется проверка."
     oldest_seconds = max(0, int((now - oldest).total_seconds())) if oldest else 0
     warnings = []
     if not fresh or worker.status not in ("idle", "running", "starting"):
@@ -199,10 +223,10 @@ def judge_data():
         "server_now": now.isoformat(),
         "worker_label": labels.get(worker.status, "Неизвестно") if worker and (fresh or worker.status in ("error", "stopped")) else "Нет свежего сигнала",
         "heartbeat_at": worker.heartbeat_at.isoformat() if worker else None,
-        "fresh": fresh, "current_submission": worker.current_submission_id if worker else None,
-        "message": worker.message if worker else "Worker ещё не запускался.",
-        "queued": Submission.objects.filter(status="queued").count(),
-        "running": Submission.objects.filter(status="running").count(),
+        "fresh": fresh, "current_submission": current,
+        "message": message,
+        "queued": submissions.filter(status="queued").count(),
+        "running": submissions.filter(status="running").count(),
         "oldest_seconds": oldest_seconds, "warnings": warnings,
         "errors": [{"id": s.pk, "student": s.attempt.student.get_full_name() or s.attempt.student.username,
                     "kind": s.get_kind_display(), "attempt_id": s.attempt_id} for s in errors],
@@ -211,18 +235,18 @@ def judge_data():
 
 @teacher_required
 def judge(request):
-    return render(request, "teacher/judge.html", {"state": judge_data()})
+    return render(request, "teacher/judge.html", {"state": judge_data(request.user)})
 
 
 @teacher_required
 def judge_state(request):
-    return JsonResponse(judge_data())
+    return JsonResponse(judge_data(request.user))
 
 
 @teacher_required
 @require_POST
 def requeue(request, pk):
-    get_object_or_404(Submission, pk=pk)
+    get_object_or_404(scoped(request.user, Submission.objects.all(), "attempt__assessment__course"), pk=pk)
     try:
         services.requeue_submission(request.user, pk)
     except ValidationError as exc:

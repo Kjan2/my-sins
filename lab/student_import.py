@@ -6,11 +6,15 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from .services import teacher
+from .models import Course
+from .permissions import require_course
 
 
 @transaction.atomic
-def import_students(actor, content):
+def import_students(actor, content, course_id):
     teacher(actor)
+    require_course(actor, course_id)
+    course = Course.objects.get(pk=course_id)
     if len(content) > 1048576:
         raise ValidationError("CSV должен быть не больше 1 МиБ.")
     try:
@@ -27,6 +31,8 @@ def import_students(actor, content):
             if None in row or any(value is None for value in row.values()):
                 raise ValidationError(f"Строка {number}: число значений не соответствует заголовку.")
             username, group = row["username"].strip(), row["group"].strip()
+            if Group.objects.filter(name=group).exclude(courses=course).exists() and not actor.is_superuser:
+                raise ValidationError(f"Строка {number}: группа недоступна в этом курсе. Используйте другое название или обратитесь к администратору.")
             if not username or not group or len(group) > 150 or username in names:
                 raise ValidationError(f"Строка {number}: укажите уникальный логин и группу длиной до 150 символов.")
             if get_user_model().objects.filter(username=username).exists():
@@ -50,5 +56,6 @@ def import_students(actor, content):
         user.set_password(password)
         user.save()
         group, _ = Group.objects.get_or_create(name=name)
+        course.groups.add(group)
         user.groups.add(group)
     return len(rows)

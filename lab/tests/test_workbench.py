@@ -1,3 +1,4 @@
+from lab.models import Course
 from datetime import timedelta
 from html.parser import HTMLParser
 
@@ -31,13 +32,16 @@ class WorkbenchTests(TestCase):
         self.student = User.objects.create_user("student")
         self.other = User.objects.create_user("other")
         group = Group.objects.create(name="Students")
+        self.course = Course.objects.create(title="Course")
+        self.course.teachers.add(self.teacher)
+        self.course.groups.add(group)
         self.student.groups.add(group)
         now = timezone.now()
-        self.work = Assessment.objects.create(title="Workbench", opens_at=now-timedelta(hours=1), closes_at=now+timedelta(hours=2))
+        self.work = Assessment.objects.create(course=self.course, title="Workbench", opens_at=now-timedelta(hours=1), closes_at=now+timedelta(hours=2))
         self.work.groups.add(group)
         self.problems = []
         for title in ["Sum", "Maximum"]:
-            problem = Problem.objects.create(title=title, statement="Read stdin and write stdout.")
+            problem = Problem.objects.create(course=self.course, title=title, statement="Read stdin and write stdout.")
             ProblemTest.objects.create(problem=problem, label="Example", input="2 3", expected="5", is_sample=True)
             ProblemTest.objects.create(problem=problem, label="PRIVATE_TEST", input="PRIVATE_INPUT", expected="PRIVATE_EXPECTED")
             AssessmentProblem.objects.create(assessment=self.work, problem=problem)

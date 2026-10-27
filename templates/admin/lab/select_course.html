@@ -1,0 +1,5 @@
+{% extends 'admin/base_site.html' %}
+{% block content %}
+<p>Выберите курс для новой записи.</p>
+<ul>{% for course in courses %}<li><a href="?course={{ course.pk }}">{{ course.title }}</a></li>{% empty %}<li>Доступных курсов пока нет. <a href="{% url 'admin:lab_course_add' %}">Создать курс</a></li>{% endfor %}</ul>
+{% endblock %}

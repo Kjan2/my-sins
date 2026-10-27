@@ -1,3 +1,4 @@
+from lab.models import Course
 from datetime import timedelta
 from copy import deepcopy
 from uuid import uuid4
@@ -17,13 +18,16 @@ class WorkflowTests(TestCase):
         self.student = User.objects.create_user("student")
         self.other = User.objects.create_user("other")
         self.group = Group.objects.create(name="Group")
+        self.course = Course.objects.create(title="Course")
+        self.course.teachers.add(self.teacher)
+        self.course.groups.add(self.group)
         self.student.groups.add(self.group)
         self.other.groups.add(self.group)
-        self.problem = Problem.objects.create(title="Sum", statement="Add numbers")
+        self.problem = Problem.objects.create(course=self.course, title="Sum", statement="Add numbers")
         Case.objects.create(problem=self.problem, label="Sample", input="1 2", expected="3", is_sample=True)
         Case.objects.create(problem=self.problem, label="SECRET_LABEL", input="SECRET_INPUT", expected="SECRET_EXPECTED")
         now = timezone.now()
-        self.work = Assessment.objects.create(title="Exam", kind="exam", opens_at=now-timedelta(hours=1), closes_at=now+timedelta(hours=2), duration_minutes=60, pass_score=12)
+        self.work = Assessment.objects.create(course=self.course, title="Exam", kind="exam", opens_at=now-timedelta(hours=1), closes_at=now+timedelta(hours=2), duration_minutes=60, pass_score=12)
         self.work.groups.add(self.group)
         AssessmentProblem.objects.create(assessment=self.work, problem=self.problem, max_score=10, required=True)
         self.question = TheoryQuestion.objects.create(assessment=self.work, problem=self.problem, text="Why?", max_score=5)
@@ -248,8 +252,9 @@ class WorkflowTests(TestCase):
     def test_login_csrf_and_admin_permissions(self):
         self.assertEqual(self.client.get("/admin/").status_code,302)
         self.client.force_login(self.teacher)
-        for url in ["/admin/",f"/admin/lab/assessment/{self.work.pk}/change/",f"/admin/lab/theoryanswer/{TheoryAnswer.objects.get().pk}/change/", "/admin/auth/user/add/"]:
+        for url in ["/admin/",f"/admin/lab/assessment/{self.work.pk}/change/",f"/admin/lab/theoryanswer/{TheoryAnswer.objects.get().pk}/change/"]:
             self.assertEqual(self.client.get(url).status_code,200,url)
+        self.assertEqual(self.client.get("/admin/auth/user/add/").status_code, 403)
         response=self.client.get(f"/admin/auth/user/{self.student.pk}/change/")
         for field in ("is_staff","is_superuser","user_permissions"):
             self.assertNotContains(response,f'name="{field}"')
