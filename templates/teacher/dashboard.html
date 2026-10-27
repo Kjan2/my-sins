@@ -1,0 +1,4 @@
+{% extends 'teacher/base.html' %}{% block teacher_content %}
+<div class="page-heading"><p class="eyebrow">Кабинет преподавателя</p><h1>Работы и ведомости</h1><a href="{% url 'admin:lab_assessment_add' %}">Создать работу</a></div>
+<div class="work-grid">{% for work in works %}<section class="card"><p class="eyebrow">{{ work.get_kind_display }}</p><h2>{{ work.title }}</h2><p>{% if work.current_version %}Опубликована версия {{ work.current_version.number }}{% else %}Черновик · ещё не опубликован{% endif %}</p><p>Попыток: {{ work.attempt_count }}</p><div class="teacher-actions"><a href="{% url 'teacher_gradebook' work.pk %}">Открыть ведомость →</a><a href="{% url 'admin:lab_assessment_change' work.pk %}">Подготовка и публикация</a></div></section>{% empty %}<section class="card"><p>Работ пока нет. Создайте и опубликуйте работу через административную форму.</p></section>{% endfor %}</div>
+{% endblock %}

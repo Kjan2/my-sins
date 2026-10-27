@@ -1,0 +1,16 @@
+{
+  "name": "department-contest-ui",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build:editor": "node scripts/build_editor.mjs",
+    "test:browser": "node tests/workspace.browser.mjs"
+  },
+  "dependencies": {
+    "monaco-editor": "0.52.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "playwright-core": "1.55.0"
+  }
+}

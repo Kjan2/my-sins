@@ -1,0 +1,7 @@
+{% extends 'base.html' %}{% load static %}
+{% block title %}Кабинет преподавателя · C++{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'teacher.css' %}">{% endblock %}
+{% block content %}
+<nav class="teacher-nav" aria-label="Кабинет преподавателя"><a href="{% url 'teacher_dashboard' %}">Работы и ведомости</a><a href="{% url 'teacher_import_students' %}">Импорт студентов</a><a href="{% url 'teacher_judge' %}">Состояние проверки</a><a href="{% url 'admin:index' %}">Подготовка работ</a></nav>
+{% block teacher_content %}{% endblock %}
+{% endblock %}

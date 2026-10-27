@@ -1,0 +1,1 @@
+{% extends 'admin/base_site.html' %}{% block content %}<p>Текущий срок: {{ item.deadline }}. Досрочно завершённые попытки не открываются.</p><form method="post">{% csrf_token %}{{ form.as_p }}<input type="submit" value="Продлить и записать в журнал"></form>{% endblock %}

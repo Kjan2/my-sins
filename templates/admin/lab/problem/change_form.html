@@ -1,0 +1,6 @@
+{% extends 'admin/change_form.html' %}
+{% block submit_buttons_bottom %}
+<div class="submit-row"><button type="submit" formaction="{% url 'admin:lab_problem_preview' %}" formtarget="_blank" formnovalidate>Предпросмотр условия</button></div>
+<div class="submit-row"><button type="submit" name="_check_reference" value="1">Сохранить и проверить эталон</button></div>
+{{ block.super }}
+{% endblock %}

@@ -1,0 +1,12 @@
+[Unit]
+Description=Contest database backup and SSH upload
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/contest-backup.env
+ExecStart=/usr/bin/python3 /srv/contest/scripts/backup_offsite.py --project /srv/contest
+UMask=0077
+TimeoutStartSec=15min

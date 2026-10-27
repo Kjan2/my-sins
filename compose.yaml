@@ -1,0 +1,85 @@
+name: department-contest
+x-environment: &environment
+  DEBUG: "0"
+  SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
+  ALLOWED_HOSTS: ${DOMAIN:?Set DOMAIN in .env}
+  CSRF_TRUSTED_ORIGINS: https://${DOMAIN}
+  HTTPS: "1"
+  DATABASE_PATH: /data/db.sqlite3
+  STATIC_ROOT: /app/staticfiles
+  WORKER_LOCK: /data/worker.lock
+  JUDGE_IMAGE: contest-judge:local
+  JUDGE_PREFIX: ${JUDGE_PREFIX:-department-judge}
+  LOGIN_TRUST_PROXY: "1"
+  LOGIN_ACCOUNT_LIMIT: ${LOGIN_ACCOUNT_LIMIT:-8}
+  LOGIN_IP_LIMIT: ${LOGIN_IP_LIMIT:-300}
+  LOGIN_WINDOW_SECONDS: ${LOGIN_WINDOW_SECONDS:-900}
+  QUEUE_WARNING_SECONDS: ${QUEUE_WARNING_SECONDS:-120}
+services:
+  init:
+    build:
+      context: .
+      target: web
+    environment: *environment
+    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py configure_sqlite && python manage.py collectstatic --noinput"]
+    volumes:
+      - database:/data
+      - staticfiles:/app/staticfiles
+    read_only: true
+    tmpfs: [/tmp]
+  web:
+    build:
+      context: .
+      target: web
+    environment: *environment
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    volumes:
+      - database:/data
+      - staticfiles:/app/staticfiles:ro
+    read_only: true
+    tmpfs: [/tmp]
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+  worker:
+    build:
+      context: .
+      target: worker
+    environment: *environment
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    volumes:
+      - database:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add: ["${DOCKER_GID:?Set DOCKER_GID to the host Docker socket group}"]
+    read_only: true
+    tmpfs: [/tmp]
+    restart: unless-stopped
+    stop_grace_period: 60s
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+  proxy:
+    image: caddy:2-alpine
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - staticfiles:/srv/static:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [web]
+    restart: unless-stopped
+  judge-image:
+    profiles: [build]
+    build: ./judge
+    image: contest-judge:local
+    entrypoint: ["true"]
+volumes:
+  database:
+  staticfiles:
+  caddy_data:
+  caddy_config:

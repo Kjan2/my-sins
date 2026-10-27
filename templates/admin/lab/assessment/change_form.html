@@ -1,0 +1,23 @@
+{% extends "admin/change_form.html" %}
+
+{% block form_top %}
+{{ block.super }}
+<div class="module">
+  <h2>Доступ студентам</h2>
+  {% if original.current_version_id %}
+  <p>Опубликована версия {{ original.current_version.number }}. Студенты видят её содержание и назначенные в ней группы. Чтобы открыть им сохранённые изменения, опубликуйте новую версию. Уже начатые попытки сохраняют прежнюю версию.</p>
+  {% else %}
+  <p><strong>Черновик — студентам не видна.</strong> Выберите учебные группы, добавьте задачи и хотя бы один скрытый тест в карточку каждой задачи. Затем нажмите «Сохранить и опубликовать».</p>
+  {% endif %}
+  <p>Студент должен состоять в одной из назначенных групп. Кнопка «Сохранить» сохраняет изменения без публикации.</p>
+</div>
+{% endblock %}
+
+{% block submit_buttons_bottom %}
+{% if has_change_permission or has_add_permission %}
+<div class="submit-row">
+  <input type="submit" name="_publish" value="Сохранить и опубликовать" class="default">
+</div>
+{% endif %}
+{{ block.super }}
+{% endblock %}

@@ -1,0 +1,3 @@
+{% extends 'base.html' %}{% block title %}Вход · Кафедра{% endblock %}{% block content %}
+<section class="login card"><p class="eyebrow">Учебная платформа</p><h1>Войти в кабинет</h1><p class="muted">Используйте логин и пароль, выданные преподавателем.</p><form method="post">{% csrf_token %}{{ form.non_field_errors }}<label for="id_username">Логин</label>{{ form.username }}<label for="id_password">Пароль</label>{{ form.password }}<input type="hidden" name="next" value="{{ next }}"><button class="primary wide">Войти</button></form></section>
+{% endblock %}

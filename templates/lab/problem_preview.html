@@ -1,0 +1,4 @@
+{% extends 'base.html' %}{% block content %}
+<section class="card"><p class="eyebrow">Предпросмотр · изменения не сохранены</p><h1>{{ title }}</h1>
+{% for heading, html in sections %}{% if heading %}<h2>{{ heading }}</h2>{% endif %}<div class="problem-content">{{ html }}</div>{% endfor %}
+</section>{% endblock %}

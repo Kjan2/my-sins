@@ -1,0 +1,12 @@
+.teacher-nav,.teacher-actions{display:flex;flex-wrap:wrap;gap:20px;margin-bottom:24px}
+.teacher-filters{display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap;margin-bottom:20px}
+.teacher-filters label{min-width:180px}.teacher-filters select{margin-top:5px}
+.teacher-table-wrap{overflow:auto;background:white;border:1px solid var(--line);border-radius:10px}
+.teacher-table{border-collapse:collapse;width:100%;font-size:14px}
+.teacher-table td,.teacher-table th{padding:14px 18px;text-align:left;border-bottom:1px solid var(--line);min-width:100px}
+.teacher-table thead{background:#eaf0ee}.teacher-table small{display:block;font-weight:normal;color:var(--muted)}
+.grade-form{margin-top:22px}.grade-form input[type=number]{max-width:160px}
+.monitor-counts{display:flex;gap:40px;flex-wrap:wrap}.monitor-counts strong{display:block;font-size:28px}
+.monitor-error{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 0;border-top:1px solid var(--line)}
+.monitor-error form{margin:0}.card details{margin-top:20px}.card+.card{margin-top:20px}
+@media(max-width:600px){.monitor-error{align-items:flex-start;flex-direction:column}.monitor-counts{gap:20px}.teacher-filters label{width:100%}}

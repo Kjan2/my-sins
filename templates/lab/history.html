@@ -1,0 +1,6 @@
+{% extends 'base.html' %}{% block content %}
+<a href="{% url 'attempt' attempt_id %}">← К работе</a><h1>История отправок</h1>
+<form method="get"><label>Задача <select name="problem"><option value="">Все задачи</option>{% for p in problems %}<option value="{{ p.id }}" {% if p.id|stringformat:'s' == problem %}selected{% endif %}>{{ p.title }}</option>{% endfor %}</select></label><button type="submit">Показать</button></form>
+<section class="card">{% for s in items %}<p><a href="{% url 'submission' s.id %}">#{{ s.id }} · {{ s.problem_title }} · {{ s.kind }}</a> · {{ s.status_label }} · {{ s.created_at }}</p>{% empty %}<p>Отправок нет.</p>{% endfor %}</section>
+<nav aria-label="Страницы истории">{% if page.has_previous %}<a href="?page={{ page.previous_page_number }}&amp;problem={{ problem|urlencode }}">← Предыдущие</a>{% endif %} Страница {{ page.number }} из {{ page.paginator.num_pages }} {% if page.has_next %}<a href="?page={{ page.next_page_number }}&amp;problem={{ problem|urlencode }}">Следующие →</a>{% endif %}</nav>
+{% endblock %}
