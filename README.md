@@ -4,7 +4,38 @@ Django 5.2 LTS, SQLite, серверные HTML-шаблоны, отдельны
 
 **Статус проверки:** [docs/verification.md](docs/verification.md). Проверки выполняются на отдельной файловой SQLite, в настоящем Docker и Chromium. Репетиция 30 студентов с перезапуском worker после улучшений: максимум ожидания 57.9 с, p95 HTTP 1.37 с на демонстрационной задаче с тремя тестами. Проверена сдача через браузер и восстановление копии; реальные задания нужно измерять отдельно. Для собственного набора задач используйте `scripts/rehearse_exam.py --problem-json /закрытый/путь/problem.json`.
 
-## Локальный запуск
+## Локальный запуск в Docker
+
+Требуются Linux и Docker Engine с Compose v2. Python и Node.js на хосте не нужны. Из корня проекта:
+
+```bash
+export DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
+docker compose -f compose.local.yaml up -d --build
+docker compose -f compose.local.yaml exec web python manage.py createsuperuser
+docker compose -f compose.local.yaml exec web python manage.py seed_demo --teacher admin
+```
+
+Вместо `admin` укажите созданный логин. Откройте <http://localhost:8080/>; кабинет преподавателя — <http://localhost:8080/teacher/>, админка — <http://localhost:8080/admin/>. Если порт занят, задайте другой перед запуском: `export PORT=8081`.
+
+Compose сам собирает редактор и образ проверки C++, применяет миграции, включает WAL, собирает статику и запускает веб, worker и Caddy. `.env` и домен для локального запуска не нужны. Сокет Docker получает только worker; веб работает от непривилегированного пользователя. Локальный режим использует HTTP и `DEBUG=1`, порт доступен только с этого компьютера. Для публичного сервера используйте конфигурацию HTTPS ниже.
+
+База хранится в отдельном Docker volume и сохраняется после остановки; существующий `db.sqlite3` на хосте не изменяется и автоматически не импортируется. Локальная и серверная конфигурации используют разные имена Compose-проекта и volumes.
+
+```bash
+# Состояние и журналы
+docker compose -f compose.local.yaml ps -a
+docker compose -f compose.local.yaml logs -f web worker proxy
+
+# Остановка с сохранением данных
+docker compose -f compose.local.yaml down
+
+# Обновление после изменения исходников
+docker compose -f compose.local.yaml up -d --build
+```
+
+`DOCKER_GID` должен быть задан в терминале при выполнении Compose-команд; после открытия нового терминала повторите `export` выше. `down -v` удаляет локальную базу, поэтому для обычной остановки используйте `down` без `-v`.
+
+## Локальный запуск без Docker для веб-приложения
 
 Требуются Python 3.12 и доступ к PyPI. Docker нужен только для проверки C++, веб-приложение запускается без него.
 

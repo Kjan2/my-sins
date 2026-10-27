@@ -7,8 +7,11 @@ __pycache__
 *.pyc
 *.sqlite3*
 .env
+.env.*
+!.env.example
 .worker.lock
 staticfiles
+static/editor
 backups
 node_modules
 test-results
