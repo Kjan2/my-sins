@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "build:editor": "node scripts/build_editor.mjs",
-    "test:browser": "node tests/workspace.browser.mjs"
+    "test:browser": "node --test tests/workspace.browser.mjs tests/authoring.browser.mjs"
   },
   "dependencies": {
     "monaco-editor": "0.52.2"

@@ -26,10 +26,16 @@ async function workbench({mobile=false, fallback=false, fastTimeout=false} = {})
     window.setTimeout = (callback, delay, ...args) => schedule(callback, delay === 15000 ? 100 : delay, ...args);
   });
   page.on("pageerror", error => errors.push(error.message));
-  const state = {saves:[], submissions:[], requests:[], fields:new Map(), taskProgress:{}, finish:null, grade:null, monitor:{...fixture.monitor}, offline:false, hangSubmit:false, hangSave:false, closed:false, deadline:new Date(Date.now()+3600000).toISOString()};
+  const state = {saves:[], submissions:[], requests:[], fields:new Map(), taskProgress:{}, resultsVisible:true, finish:null, grade:null, monitor:{...fixture.monitor}, offline:false, hangSubmit:false, hangSave:false, closed:false, deadline:new Date(Date.now()+3600000).toISOString()};
   const escape = value => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
   const html = () => {
     let result = fixture.html;
+    const latestJudged = {};
+    for (const item of state.submissions.filter(item => item.kind_code === "judge")) {
+      const previous = latestJudged[item.problem_id];
+      if (!previous || item.id > previous.id) latestJudged[item.problem_id] = {id:item.id};
+    }
+    result = result.replace(/(<script id="latest-judge-data"[^>]*>)[\s\S]*?(<\/script>)/, (_, start, end) => start + JSON.stringify(latestJudged) + end);
     for (const field of state.fields.values()) {
       const code = field.type === "code", id = field.problem ?? field.question;
       result = result.replace(`data-${code ? "problem" : "question"}="${id}" data-revision="0"`, `data-${code ? "problem" : "question"}="${id}" data-revision="${field.revision}"`);
@@ -62,7 +68,7 @@ async function workbench({mobile=false, fallback=false, fastTimeout=false} = {})
       if (state.offline) return route.abort();
       return json(state.monitor);
     }
-    if (url.pathname === "/attempts/101/state/") return json({...clock(), task_progress:state.taskProgress, submissions:state.submissions.map(({result,...meta})=>meta)});
+    if (url.pathname === "/attempts/101/state/") return json({...clock(), results_visible:state.resultsVisible, task_progress:state.taskProgress, submissions:state.submissions.map(({result,source,custom_input,...meta})=>meta)});
     if (/^\/submissions\/\d+\/state\/$/.test(url.pathname)) return json({submission:state.submissions.find(item=>item.id===Number(url.pathname.split("/")[2]))});
     if (url.pathname === "/attempts/101/save/") {
       if (state.offline) return route.abort();
@@ -95,7 +101,7 @@ async function workbench({mobile=false, fallback=false, fastTimeout=false} = {})
     return route.fulfill({status:404,body:""});
   });
   await page.goto(origin+"/attempts/101/");
-  if (!fallback) await page.locator('#problem-1[data-editor="monaco"]').waitFor();
+  if (!fallback) await page.locator('#problem-1[data-editor="monaco"]').waitFor({state:"attached"});
   return {page,context,state,errors};
 }
 async function appendCode(page, text, problem=1) {
@@ -258,13 +264,75 @@ test("server deadline locks the editor and an extension reopens the same draft",
 test("mobile layout fits the viewport and editor fallback still saves", async () => {
   const {page,context,state,errors}=await workbench({mobile:true,fallback:true});
   try {
+    await page.locator('.mobile-workspace-nav [data-mobile-view="code"]').click();
     const input=page.locator("#code-1");
     await input.fill("int main(){return 0;}"); await saved(page);
     assert.equal(state.saves.at(-1).source,"int main(){return 0;}");
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
+    await page.locator('.mobile-workspace-nav [data-mobile-view="statement"]').click();
+    assert.equal(await page.locator("#code-1").isVisible(),false);
+    await page.locator('.mobile-workspace-nav [data-mobile-view="code"]').click();
+    assert.equal(await input.inputValue(),"int main(){return 0;}");
+    await page.locator('.mobile-workspace-nav [data-mobile-view="output"]').click();
     await page.locator("#samples-tab").click();
     assert.equal(await page.locator("#samples-panel").isVisible(),true);
     await page.screenshot({path:"test-results/workspace-mobile.png",fullPage:true});
+    assert.deepEqual(errors,[]);
+  } finally { await context.close(); }
+});
+
+test("progress and final review distinguish drafts, graded submissions and empty theory", async () => {
+  const {page,context,state}=await workbench();
+  try {
+    assert.match(await page.locator("#code-progress").textContent(),/Отправлено: 0 из 2/);
+    await page.locator("#problem-1 .sample-run").click();
+    await page.waitForFunction(()=>document.querySelector("#run-result").textContent.includes("В очереди"));
+    assert.match(await page.locator("#code-progress").textContent(),/Отправлено: 0 из 2/);
+    await page.locator("#problem-1 .judge-run").click();
+    await page.waitForFunction(()=>document.querySelector("#code-progress").textContent.includes("Отправлено: 1 из 2"));
+    await appendCode(page,"\n// saved but not submitted"); await saved(page);
+    await page.locator("#finish-button").click();
+    const review=await page.locator("#finish-checklist").textContent();
+    assert.ok(review.includes("код изменён после последней отправки"));
+    assert.ok(review.includes("Максимум из трёх: решение не отправлено"));
+    assert.ok(review.includes("Вопросов по теории без ответа: 1"));
+    assert.ok(review.includes("Отправок в очереди или на проверке: 1"));
+    await page.locator("#cancel-finish").click();
+    await page.locator("#theory-progress").click();
+    await page.locator("#answer-1").fill("Использую long long.");
+    assert.match(await page.locator("#theory-progress").textContent(),/1 из 1/);
+    state.taskProgress={"1":"Принято"};
+    await page.waitForFunction(()=>document.querySelector("#code-progress").textContent.includes("Принято: 1"),null,{timeout:9000});
+    await page.reload();
+    await page.locator('#problem-1[data-editor="monaco"]').waitFor();
+    await page.locator("#finish-button").click();
+    await page.waitForFunction(()=>document.querySelector("#finish-checklist").textContent.includes("код изменён после последней отправки"));
+    await page.locator("#cancel-finish").click();
+    state.resultsVisible=false; state.taskProgress={"1":"Отправлено"};
+    await page.waitForFunction(()=>document.querySelector("#code-progress").textContent.includes("Результаты после закрытия"),null,{timeout:9000});
+  } finally { await context.close(); }
+});
+
+test("mobile Monaco keeps drafts across panes, tasks and viewport sizes", async () => {
+  const {page,context,errors}=await workbench({mobile:true});
+  try {
+    await page.locator('.mobile-workspace-nav [data-mobile-view="code"]').click();
+    await appendCode(page,"\n// mobile draft"); await saved(page);
+    await page.locator('.mobile-workspace-nav [data-mobile-view="statement"]').click();
+    await page.screenshot({path:"test-results/workspace-mobile-statement.png"});
+    await page.selectOption("#task-select","2");
+    await page.locator('.mobile-workspace-nav [data-mobile-view="code"]').click();
+    assert.equal(await page.locator("#code-2").inputValue(),fixture.source);
+    await page.selectOption("#task-select","1");
+    assert.ok((await page.locator("#code-1").inputValue()).includes("mobile draft"));
+    await page.screenshot({path:"test-results/workspace-mobile-editor.png"});
+    for (const width of [320,768,1024,1366]) {
+      await page.setViewportSize({width,height:844});
+      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`horizontal overflow at ${width}px`);
+    }
+    await page.setViewportSize({width:390,height:844});
+    await page.locator("#finish-button").click();
+    await page.screenshot({path:"test-results/workspace-finish-review.png"});
     assert.deepEqual(errors,[]);
   } finally { await context.close(); }
 });

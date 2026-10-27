@@ -124,6 +124,10 @@ def attempt(request, pk):
     answers = {a.question_id: a for a in item.answers.all()}
     submissions = list(item.submissions.only(*SUBMISSION_META).order_by("-pk")[:50])
     linked_submissions = list(item.submissions.filter(kind="judge").values("id", "problem_id"))
+    latest_judged = {}
+    for submission in linked_submissions:
+        key = str(submission["problem_id"])
+        latest_judged[key] = {"id": max(submission["id"], latest_judged.get(key, {}).get("id", 0))}
     progress = task_progress(request.user, item)
     problems = [{"id": p["id"], "title": p["title"], "statement": p["statement"], "sections": problem_sections(p),
                  "time_limit": p["time_limit"], "memory_mb": p["memory_mb"], "max_score": p["max_score"],
@@ -134,7 +138,7 @@ def attempt(request, pk):
         p["progress"] = progress[str(p["id"])]
     questions = [{"id": q["id"], "text": q["text"], "max_score": q["max_score"], "answer": answers.get(q["id"]), "submissions": [{"id": s["id"]} for s in linked_submissions if s["problem_id"] == q["problem_id"]], "problem_id": q["problem_id"], "linked": bool(q["problem_id"])} for q in item.snapshot["questions"]]
     active = not item.finished_at and timezone.now() < item.deadline and item.student_id == request.user.pk
-    return render(request, "lab/attempt.html", {"attempt_id": pk, "title": item.snapshot["title"], "instructions": item.snapshot["instructions"], "version": item.version.number, "problems": problems, "questions": questions, "submissions": [public_submission(request.user, s, item, include_result=False) for s in submissions[:50]], "active": active, "can_edit": not item.finished_at and item.student_id == request.user.pk, "clock": clock_data(item)})
+    return render(request, "lab/attempt.html", {"attempt_id": pk, "title": item.snapshot["title"], "instructions": item.snapshot["instructions"], "version": item.version.number, "problems": problems, "questions": questions, "latest_judged": latest_judged, "results_visible": services.results_visible(request.user, item), "submissions": [public_submission(request.user, s, item, include_result=False) for s in submissions[:50]], "active": active, "can_edit": not item.finished_at and item.student_id == request.user.pk, "clock": clock_data(item)})
 
 
 @login_required
@@ -195,7 +199,7 @@ def finish(request, pk):
 @login_required
 def state(request, pk):
     item = owned(request.user, pk)
-    return JsonResponse({**clock_data(item), "task_progress": task_progress(request.user, item), "submissions": [public_submission(request.user, s, item, include_result=False) for s in item.submissions.only(*SUBMISSION_META).order_by("-pk")[:50]]})
+    return JsonResponse({**clock_data(item), "task_progress": task_progress(request.user, item), "results_visible": services.results_visible(request.user, item), "submissions": [public_submission(request.user, s, item, include_result=False) for s in item.submissions.only(*SUBMISSION_META).order_by("-pk")[:50]]})
 
 
 @login_required

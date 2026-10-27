@@ -11,12 +11,12 @@ monaco.editor.defineTheme("department", {
   base: "vs", inherit: true, rules: [],
   colors: {
     "editor.background": "#ffffff",
-    "editorLineNumber.foreground": "#a3aab4",
+    "editorLineNumber.foreground": "#71809a",
     "editorLineNumber.activeForeground": "#52606d",
     "editor.lineHighlightBackground": "#f6f8fa",
     "editor.selectionBackground": "#dbeafe",
     "editorIndentGuide.background1": "#edf0f3",
-    "editorCursor.foreground": "#167464",
+    "editorCursor.foreground": "#2457d6",
   },
 });
 const keywords = "alignas alignof auto bool break case catch char class const constexpr continue default delete do double else enum explicit extern false float for friend if inline int long namespace new nullptr operator private protected public return short signed sizeof static struct switch template this throw true try typedef typename union unsigned using virtual void volatile while".split(" ");

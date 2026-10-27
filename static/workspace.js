@@ -15,6 +15,7 @@
   let closed = clock.closed, operation = null, leaving = false;
   let serverTime = Date.parse(clock.server_now), deadline = Date.parse(clock.deadline), syncAt = performance.now();
   let submissions = JSON.parse(document.querySelector("#submission-data").textContent);
+  const latestJudged = new Map(Object.entries(JSON.parse(document.querySelector("#latest-judge-data").textContent) || {}));
   let selectedProblem = taskSelect.value;
   let fontSize = 14;
   try { fontSize = Math.max(12, Math.min(20, Number(localStorage.getItem("department:editor-font")) || 14)); } catch (_) {}
@@ -38,6 +39,51 @@
     return node;
   }
   function canSave() { return eligible && !closed; }
+  function updateProgress() {
+    // The server's progress covers all submissions, including those outside the recent history.
+    for (const item of submissions) {
+      if (item.kind_code !== "judge") continue;
+      const id = String(item.problem_id), known = latestJudged.get(id);
+      if (!known || item.id > known.id) latestJudged.set(id, {id: item.id, source: item.source});
+    }
+    const options = [...taskSelect.options];
+    const sent = options.filter(option => latestJudged.has(option.value) || ["Принято", "Отправлено"].includes(option.dataset.progress)).length;
+    const accepted = options.filter(option => option.dataset.progress === "Принято").length;
+    const codeProgress = document.querySelector("#code-progress");
+    const progressText = `Отправлено: ${sent} из ${options.length} · ${root.dataset.resultsVisible === "true" ? `Принято: ${accepted}` : "Результаты после закрытия"}`;
+    if (codeProgress.textContent !== progressText) codeProgress.textContent = progressText;
+    const answers = fields.filter(field => !field.code);
+    const theoryProgress = document.querySelector("#theory-progress");
+    if (theoryProgress) theoryProgress.textContent = `Теория заполнена: ${answers.filter(field => field.input.value.trim()).length} из ${answers.length}`;
+    if (finishDialog?.open) renderFinishChecklist();
+  }
+  function renderFinishChecklist() {
+    const checklist = document.querySelector("#finish-checklist");
+    if (!checklist) return;
+    const items = [];
+    for (const field of codeFields) {
+      const title = [...taskSelect.options].find(option => option.value === field.id).dataset.title;
+      const latest = latestJudged.get(field.id);
+      if (!latest) items.push(`${title}: решение не отправлено на оценку.`);
+      else if (latest.source === undefined) items.push(`${title}: код последней отправки ещё не сверен. Проверьте историю отправок.`);
+      else if (field.input.value !== latest.source) items.push(`${title}: код изменён после последней отправки. Изменения не будут оценены.`);
+    }
+    const emptyAnswers = fields.filter(field => !field.code && !field.input.value.trim()).length;
+    if (emptyAnswers) items.push(`Вопросов по теории без ответа: ${emptyAnswers}.`);
+    const checking = submissions.filter(item => item.kind_code === "judge" && ["queued", "running"].includes(item.status)).length;
+    if (checking) items.push(`Отправок в очереди или на проверке: ${checking}. Они будут проверены после завершения.`);
+    checklist.replaceChildren(...items.map(text => element("li", "", text)));
+    checklist.hidden = items.length === 0;
+  }
+  function showMobileView(view) {
+    root.dataset.mobileView = view;
+    root.querySelectorAll(".mobile-workspace-nav button").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.mobileView === view)));
+  }
+  root.querySelectorAll(".mobile-workspace-nav button").forEach(button => button.addEventListener("click", () => showMobileView(button.dataset.mobileView)));
+  document.querySelector("#theory-progress")?.addEventListener("click", () => {
+    showMobileView("statement"); selectTab(document.querySelector("#theory-tab"));
+    document.querySelector("#theory-tab").focus();
+  });
   function updateEditable() {
     const writable = canSave() && !operation;
     const closedNotice = document.querySelector("#closed-notice");
@@ -70,8 +116,12 @@
   }
   function sync(data) {
     if (!data.server_now) return;
+    if (typeof data.results_visible === "boolean") root.dataset.resultsVisible = String(data.results_visible);
     if (data.task_progress) for (const option of taskSelect.options) {
-      if (data.task_progress[option.value]) option.textContent = `${option.dataset.title} · ${data.task_progress[option.value]}`;
+      if (data.task_progress[option.value]) {
+        option.dataset.progress = data.task_progress[option.value];
+        option.textContent = `${option.dataset.title} · ${option.dataset.progress}`;
+      }
     }
     serverTime = Date.parse(data.server_now); deadline = Date.parse(data.deadline); syncAt = performance.now();
     if (closed !== data.closed) {
@@ -132,6 +182,7 @@
     field.change = () => {
       if (field.assigning) return;
       field.revision++; field.dirty = true; field.store();
+      if (!code) updateProgress();
       setStatus(field, field.localSaved ? "Есть несохранённые изменения" : "Не сохранено. Локальная копия недоступна — дождитесь связи с сервером.", "dirty");
       clearTimeout(field.timer);
       if (canSave() && !operation && !field.conflict) field.timer = setTimeout(() => saveField(field).catch(() => {}), 900);
@@ -242,7 +293,7 @@
       field.revision++; field.dirty = false;
       setStatus(field, "Загружено с сервера", "saved");
     } else { field.change(); saveField(field).catch(() => {}); }
-    conflictDialog.close();
+    conflictDialog.close(); updateProgress();
   }
   document.querySelector("#conflict-use-server").onclick = () => resolveConflict(true);
   document.querySelector("#conflict-keep-local").onclick = () => resolveConflict(false);
@@ -388,6 +439,7 @@
   function revealDiagnostic(item, line, column) {
     const field = codeFields.find(field => field.id === String(item.problem_id));
     if (field.input.value === item.source) {
+      showMobileView("code");
       selectProblem(field.id);
       if (field.editor) field.editor.reveal(line, column);
       else selectSourceLine(field.input, line, column);
@@ -443,7 +495,7 @@
     pollBusy = true;
     try {
       const data = await requestJSON(base + "state/");
-      sync(data); submissions = data.submissions; renderHistory(); showSelectedResult();
+      sync(data); submissions = data.submissions; updateProgress(); renderHistory(); showSelectedResult();
       if (message.dataset.kind === "poll") message.hidden = true;
     } catch (_) { notice("Не удалось обновить результаты. Проверяем соединение и повторяем запрос.", "poll"); }
     finally { pollBusy = false; }
@@ -451,6 +503,7 @@
   async function run(field, kind) {
     if (!canSave() || operation || pendingSubmission) return;
     operation = "submit"; updateEditable();
+    showMobileView("output");
     selectTab(document.querySelector("#result-tab"));
     const source = field.input.value;
     try {
@@ -506,6 +559,8 @@
       const data = await post("submit/", payload);
       const item = data.submission;
       submissions = [item, ...submissions.filter(row => row.id !== item.id)].slice(0, 50);
+      if (payload.kind === "judge") latestJudged.set(String(item.problem_id), {id: item.id, source: payload.source});
+      updateProgress();
       selections.set(String(item.problem_id), item.id);
       if (payload.kind === "judge") root.querySelectorAll(`.theory-question select[data-problem="${item.problem_id}"]`).forEach(select => {
         if (![...select.options].some(option => option.value === String(item.id))) select.add(new Option(`Отправка #${item.id}`, item.id));
@@ -550,7 +605,19 @@
     catch (error) { notice(error.message, "error"); }
   });
 
-  document.querySelector("#finish-button")?.addEventListener("click", () => finishDialog.showModal());
+  document.querySelector("#finish-button")?.addEventListener("click", () => {
+    renderFinishChecklist(); finishDialog.showModal();
+    // Load code only when comparing it; the page and periodic polling use metadata.
+    for (const [id, latest] of latestJudged) {
+      if (latest.source !== undefined) continue;
+      requestJSON(`/submissions/${latest.id}/state/`).then(data => {
+        if (latestJudged.get(id)?.id === latest.id) {
+          latest.source = data.submission.source;
+          if (finishDialog.open) renderFinishChecklist();
+        }
+      }).catch(() => {});
+    }
+  });
   document.querySelector("#cancel-finish")?.addEventListener("click", () => { if (!operation) finishDialog.close(); });
   finishDialog?.addEventListener("cancel", event => { if (operation) event.preventDefault(); });
   document.querySelector("#confirm-finish")?.addEventListener("click", async () => {
@@ -604,6 +671,7 @@
   });
 
   sync(clock);
+  updateProgress();
   selectProblem(location.hash.replace(/^#problem-/, "") || selectedProblem);
   let deadlineFlush = false;
   function tick() {

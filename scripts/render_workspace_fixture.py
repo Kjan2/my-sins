@@ -33,7 +33,7 @@ context = {
          "samples":[{"label":"Разные числа", "input":"2 9 3\n", "expected":"9\n"}]},
     ],
     "questions":[{"id":1, "text":"Какой целочисленный тип вы выбрали для суммы и почему он подходит для ограничений задачи?", "max_score":5, "answer":{"text":"", "submission_id":None}, "submissions":[], "linked":True, "problem_id":1}],
-    "submissions":[],
+    "submissions":[], "latest_judged":{}, "results_visible":True,
 }
 workspace_html = render_to_string("lab/attempt.html", context, request=request)
 

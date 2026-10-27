@@ -105,6 +105,17 @@ class ImprovementTests(TestCase):
         self.assertContains(response, "Отправка принята")
         self.assertNotContains(response, "Неверный ответ")
         self.assertEqual(self.client.get(f"/attempts/{hidden.pk}/state/").json()["task_progress"][str(self.problem.pk)], "Отправлено")
+        self.assertFalse(self.client.get(f"/attempts/{hidden.pk}/state/").json()["results_visible"])
+
+    def test_finish_review_keeps_judge_metadata_outside_recent_history(self):
+        judged = Submission.objects.create(attempt=self.attempt, problem_id=self.problem.pk,
+                                           source="older judged code", kind="judge")
+        Submission.objects.bulk_create([Submission(attempt=self.attempt, problem_id=self.problem.pk,
+            source="newer sample code", kind="sample") for _ in range(55)])
+        response = self.client.get(f"/attempts/{self.attempt.pk}/")
+        self.assertEqual(response.context["latest_judged"], {str(self.problem.pk): {"id": judged.pk}})
+        self.assertNotIn(judged.pk, [s["id"] for s in response.context["submissions"]])
+        self.assertNotContains(response, "older judged code")
 
     def test_csv_import_is_atomic_and_never_updates_existing_users(self):
         valid = "username,password,group,first_name\nnew-one,Z7!mR4@qT9#vL2,New group,Имя\n"

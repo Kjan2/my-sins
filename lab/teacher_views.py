@@ -7,7 +7,7 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
-from django.db.models import Count, Prefetch
+from django.db.models import Count, Prefetch, Q
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -62,7 +62,8 @@ class StudentImportForm(forms.Form):
 @teacher_required
 def import_students(request):
     from .student_import import import_students as save_students
-    form = StudentImportForm(request.POST or None, request.FILES or None, user=request.user)
+    form = StudentImportForm(request.POST or None, request.FILES or None, user=request.user,
+                             initial={"course": request.GET.get("course", "")})
     if request.method == "POST" and form.is_valid():
         try:
             count = save_students(request.user, form.cleaned_data["file"].read(1048577), form.cleaned_data["course"].pk)
@@ -107,8 +108,20 @@ def dashboard(request):
         if course is None:
             raise Http404
         works = works.filter(course=course)
-    works = works.annotate(attempt_count=Count("attempts")).order_by("-pk")
-    return render(request, "teacher/dashboard.html", {"works": works, "courses": courses, "course_id": selected})
+    query = request.GET.get("q", "").strip()[:200]
+    if query:
+        works = works.filter(title__icontains=query)
+    counts = works.aggregate(total=Count("pk"), drafts=Count("pk", filter=Q(current_version__isnull=True)),
+                             published=Count("pk", filter=Q(current_version__isnull=False)))
+    status = request.GET.get("status", "")
+    if status not in ("", "draft", "published"):
+        raise Http404
+    if status:
+        works = works.filter(current_version__isnull=status == "draft")
+    works = works.annotate(attempt_count=Count("attempts", distinct=True),
+                           problem_count=Count("problem_rules", distinct=True)).prefetch_related("groups").order_by("-pk")
+    return render(request, "teacher/dashboard.html", {"works": works, "courses": courses, "course_id": selected,
+        "query": query, "status": status, "counts": counts})
 
 
 @teacher_required

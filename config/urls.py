@@ -3,9 +3,19 @@ from django.contrib.auth import views as auth_views
 from django.urls import path
 from lab import views
 from lab import teacher_views
+from lab import management_views
 
 urlpatterns = [
     path("teacher/", teacher_views.dashboard, name="teacher_dashboard"),
+    path("teacher/courses/", management_views.courses, name="teacher_courses"),
+    path("teacher/courses/new/", management_views.course_edit, name="teacher_course_create"),
+    path("teacher/courses/<int:pk>/edit/", management_views.course_edit, name="teacher_course_edit"),
+    path("teacher/assessments/new/", management_views.assessment_edit, name="teacher_assessment_create"),
+    path("teacher/assessments/<int:pk>/edit/", management_views.assessment_edit, name="teacher_assessment_edit"),
+    path("teacher/problems/", management_views.problems, name="teacher_problems"),
+    path("teacher/problems/new/", management_views.problem_edit, name="teacher_problem_create"),
+    path("teacher/problems/<int:pk>/edit/", management_views.problem_edit, name="teacher_problem_edit"),
+    path("teacher/problems/preview/", management_views.problem_preview, name="teacher_problem_preview"),
     path("teacher/students/import/", teacher_views.import_students, name="teacher_import_students"),
     path("teacher/assessments/<int:pk>/", teacher_views.gradebook, name="teacher_gradebook"),
     path("teacher/attempts/<int:pk>/", teacher_views.attempt, name="teacher_attempt"),

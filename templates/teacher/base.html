@@ -2,6 +2,7 @@
 {% block title %}Кабинет преподавателя · C++{% endblock %}
 {% block head %}<link rel="stylesheet" href="{% static 'teacher.css' %}">{% endblock %}
 {% block content %}
-<nav class="teacher-nav" aria-label="Кабинет преподавателя"><a href="{% url 'teacher_dashboard' %}">Работы и ведомости</a><a href="{% url 'teacher_import_students' %}">Импорт студентов</a><a href="{% url 'teacher_judge' %}">Состояние проверки</a><a href="{% url 'admin:index' %}">Подготовка работ</a></nav>
+<nav class="teacher-nav" aria-label="Кабинет преподавателя"><a href="{% url 'teacher_dashboard' %}" {% if request.resolver_match.url_name == 'teacher_dashboard' or 'teacher_assessment' in request.resolver_match.url_name or request.resolver_match.url_name == 'teacher_gradebook' %}aria-current="page"{% endif %}>Работы</a><a href="{% url 'teacher_problems' %}" {% if 'teacher_problem' in request.resolver_match.url_name %}aria-current="page"{% endif %}>Библиотека задач</a><a href="{% url 'teacher_courses' %}" {% if 'teacher_course' in request.resolver_match.url_name %}aria-current="page"{% endif %}>Курсы и группы</a><a href="{% url 'teacher_import_students' %}" {% if request.resolver_match.url_name == 'teacher_import_students' %}aria-current="page"{% endif %}>Студенты</a><a href="{% url 'teacher_judge' %}" {% if request.resolver_match.url_name == 'teacher_judge' %}aria-current="page"{% endif %}>Проверка решений</a></nav>
 {% block teacher_content %}{% endblock %}
 {% endblock %}
+{% block scripts %}<script src="{% static 'authoring.js' %}" defer></script>{% endblock %}
