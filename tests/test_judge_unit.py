@@ -81,7 +81,9 @@ class JudgeTests(unittest.TestCase):
         problem["tests"]*=2
         judge=FakeJudge([run_result(),run_result(stdout=b"42",stderr=b"SECRET_STDERR"),run_result(stdout=b"42")])
         result=judge.judge("source",problem,"judge")
-        self.assertEqual(result,{"status":"accepted","result":{}})
+        self.assertEqual(result["status"],"accepted")
+        self.assertEqual(result["result"]["tests"], {"passed":2,"executed":2,"total":2})
+        self.assertNotIn("SECRET_STDERR", json.dumps(result))
         creates=[c for c in judge.calls if c[0]=="create"]
         self.assertEqual(len(creates),3)
         self.assertEqual(sum("g++" in c for c in creates),1)

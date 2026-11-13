@@ -28,7 +28,7 @@ class ConcurrentWorkflowTests(TransactionTestCase):
         self.problem=Problem.objects.create(course=self.course, title="sum",statement="sum")
         TestCase.objects.create(problem=self.problem,label="hidden",expected="0")
         now=timezone.now()
-        self.work=Assessment.objects.create(course=self.course, title="load",opens_at=now-timedelta(hours=1),closes_at=now+timedelta(hours=1))
+        self.work=Assessment.objects.create(task_workflow=False, course=self.course, title="load",opens_at=now-timedelta(hours=1),closes_at=now+timedelta(hours=1))
         self.work.groups.add(self.group)
         AssessmentProblem.objects.create(assessment=self.work,problem=self.problem)
         publish_assessment(self.teacher,self.work.pk)
@@ -149,3 +149,44 @@ class ConcurrentWorkflowTests(TransactionTestCase):
                 time.sleep(.7)
             future.result(timeout=10)
         self.assertEqual(Submission.objects.count(),0)
+
+    def task_work(self):
+        from lab import tasks
+        self.work.task_workflow = True
+        self.work.save()
+        publish_assessment(self.teacher, self.work.pk)
+        user = User.objects.create_user('task-student')
+        user.groups.add(self.group)
+        attempt = start_attempt(user, self.work.pk)
+        return user, attempt
+
+    def test_parallel_task_start_and_send_create_one_attempt_and_submission(self):
+        from lab import tasks
+        from lab.models import TaskAttempt
+        user, attempt = self.task_work()
+        ids = self.parallel(8, lambda _:tasks.start_task(User.objects.get(pk=user.pk), attempt.pk, self.problem.pk).pk)
+        self.assertEqual(len(set(ids)), 1)
+        sent = self.parallel(8, lambda _:tasks.send_task(User.objects.get(pk=user.pk), ids[0]).pk)
+        self.assertEqual(len(set(sent)), 1)
+        self.assertEqual(TaskAttempt.objects.count(), 1)
+        self.assertEqual(Submission.objects.count(), 1)
+
+    def test_task_expiration_and_late_save_use_last_server_files(self):
+        from lab import tasks
+        from lab.models import TaskAttempt
+        user, attempt = self.task_work()
+        item = tasks.start_task(user, attempt.pk, self.problem.pk)
+        tasks.save_task(user, item.pk, {'revision':0, 'files':{'main.cpp':'BEFORE_TIMEOUT'}})
+        TaskAttempt.objects.filter(pk=item.pk).update(deadline=timezone.now()-timedelta(seconds=1))
+        def expire_or_save(index):
+            if index % 2:
+                try:
+                    tasks.save_task(User.objects.get(pk=user.pk), item.pk, {'revision':1,'files':{'main.cpp':'TOO_LATE'}})
+                    return 'saved'
+                except ValidationError:
+                    return 'rejected'
+            tasks.expire_task(TaskAttempt.objects.get(pk=item.pk))
+            return 'expired'
+        results = self.parallel(8, expire_or_save)
+        self.assertNotIn('saved', results)
+        self.assertEqual(Submission.objects.get().source, 'BEFORE_TIMEOUT')

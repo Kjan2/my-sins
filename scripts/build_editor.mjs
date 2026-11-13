@@ -18,3 +18,9 @@ for (const name of ["LICENSE", "ThirdPartyNotices.txt"]) {
   await copyFile(`node_modules/monaco-editor/${name}`, `${output}/${name}`);
 }
 console.log("Built local Monaco editor, C++ support, styles and worker.");
+await build({
+  entryPoints:["frontend/math.js"], outfile:"static/math/math.js", bundle:true,
+  minify:true, target:"es2020", loader:{".woff":"file", ".woff2":"file", ".ttf":"file"},
+  assetNames:"fonts/[name]-[hash]", legalComments:"linked",
+});
+await copyFile('node_modules/katex/LICENSE', 'static/math/LICENSE');

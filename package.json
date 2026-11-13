@@ -4,9 +4,11 @@
   "private": true,
   "scripts": {
     "build:editor": "node scripts/build_editor.mjs",
-    "test:browser": "node --test tests/workspace.browser.mjs tests/authoring.browser.mjs"
+    "test:browser": "node --test tests/workspace.browser.mjs tests/authoring.browser.mjs",
+    "test:practical": "node --test tests/practical.browser.mjs"
   },
   "dependencies": {
+    "katex": "0.19.1",
     "monaco-editor": "0.52.2"
   },
   "devDependencies": {

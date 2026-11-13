@@ -27,7 +27,7 @@ class WorkflowTests(TestCase):
         Case.objects.create(problem=self.problem, label="Sample", input="1 2", expected="3", is_sample=True)
         Case.objects.create(problem=self.problem, label="SECRET_LABEL", input="SECRET_INPUT", expected="SECRET_EXPECTED")
         now = timezone.now()
-        self.work = Assessment.objects.create(course=self.course, title="Exam", kind="exam", opens_at=now-timedelta(hours=1), closes_at=now+timedelta(hours=2), duration_minutes=60, pass_score=12)
+        self.work = Assessment.objects.create(task_workflow=False, course=self.course, title="Exam", kind="exam", opens_at=now-timedelta(hours=1), closes_at=now+timedelta(hours=2), duration_minutes=60, pass_score=12)
         self.work.groups.add(self.group)
         AssessmentProblem.objects.create(assessment=self.work, problem=self.problem, max_score=10, required=True)
         self.question = TheoryQuestion.objects.create(assessment=self.work, problem=self.problem, text="Why?", max_score=5)
@@ -71,12 +71,13 @@ class WorkflowTests(TestCase):
         self.assertEqual(self.attempt.deadline, self.attempt.started_at+timedelta(minutes=60))
         self.assertEqual(Attempt.objects.count(), 1)
 
-    def test_common_close_caps_duration(self):
+    def test_start_deadline_does_not_cap_duration(self):
         self.work.duration_minutes = 500
         self.work.save()
         services.publish_assessment(self.teacher, self.work.pk)
         item = services.start_attempt(self.other, self.work.pk)
-        self.assertEqual(item.deadline, self.work.closes_at)
+        self.assertEqual(item.deadline, item.started_at + timedelta(minutes=500))
+        self.assertGreater(item.deadline, self.work.closes_at)
 
     def test_foreign_access_forbidden(self):
         self.client.force_login(self.other)
@@ -209,7 +210,7 @@ class WorkflowTests(TestCase):
         submission = services.submit_code(self.other,other.pk,self.problem.pk,"other","judge")
         with self.assertRaises(ValidationError): services.save_answer(self.student,self.attempt.pk,self.question.pk,"text",submission.pk)
 
-    def test_scores_best_submission_required_and_provisional(self):
+    def test_scores_last_completed_submission_required_and_provisional(self):
         sample = self.submit(kind="sample")
         Submission.objects.filter(pk=sample.pk).update(status="accepted")
         self.assertEqual(services.result_summary(self.attempt)["score"],0)
@@ -222,9 +223,9 @@ class WorkflowTests(TestCase):
         self.assertTrue(services.result_summary(self.attempt)["provisional"])
         services.grade_answer(self.teacher,answer.pk,2,"OK")
         summary = services.result_summary(Attempt.objects.get(pk=self.attempt.pk))
-        self.assertEqual(summary["score"],12)
+        self.assertEqual(summary["score"],2)
         self.assertFalse(summary["provisional"])
-        self.assertTrue(summary["passed"])
+        self.assertFalse(summary["passed"])
         Submission.objects.filter(pk=accepted.pk).update(status="wrong_answer")
         summary = services.result_summary(Attempt.objects.get(pk=self.attempt.pk))
         self.assertFalse(summary["required_ok"])

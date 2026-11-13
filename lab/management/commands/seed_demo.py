@@ -31,7 +31,7 @@ class Command(BaseCommand):
         TestCase.objects.create(problem=problem, label="Отрицательные", input="-9 -4\n", expected="-13\n")
         TestCase.objects.create(problem=problem, label="Граница", input="1000000000 1000000000\n", expected="2000000000\n")
         now = timezone.now()
-        work = Assessment.objects.create(course=course, title="Демонстрация · сумма двух чисел", kind="exam", opens_at=now-timedelta(minutes=1), closes_at=now+timedelta(days=7), duration_minutes=60, pass_score=10, instructions="Решите задачу и объясните выбор типа данных. Отправка на проверку оценивает код; черновик сам по себе не оценивается.")
+        work = Assessment.objects.create(task_workflow=False, course=course, title="Демонстрация · сумма двух чисел", kind="exam", opens_at=now-timedelta(minutes=1), closes_at=now+timedelta(days=7), duration_minutes=60, pass_score=10, instructions="Решите задачу и объясните выбор типа данных. Отправка на проверку оценивает код; черновик сам по себе не оценивается.")
         work.groups.add(group)
         AssessmentProblem.objects.create(assessment=work, problem=problem, max_score=10)
         TheoryQuestion.objects.create(assessment=work, problem=problem, text="Какой целочисленный тип вы выбрали и почему он подходит для ограничений задачи?", max_score=5)

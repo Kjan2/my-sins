@@ -147,6 +147,8 @@ class TestInline(admin.TabularInline):
 
 @admin.register(models.Problem)
 class ProblemAdmin(TeachingAdmin):
+    from .teacher_forms import ProblemForm
+    form = ProblemForm
     change_form_template = "admin/lab/problem/change_form.html"
     list_display = ["title", "course", "time_limit", "memory_mb"]
     inlines = [TestInline]

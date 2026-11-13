@@ -14,6 +14,10 @@ class Course(models.Model):
         verbose_name="Преподаватели", limit_choices_to={"is_staff": True, "is_active": True})
     groups = models.ManyToManyField(Group, related_name="courses", verbose_name="Учебные группы", blank=True)
 
+    description = models.TextField("Описание и критерии оценивания", blank=True)
+    faq = models.TextField("FAQ для студентов", blank=True)
+    acceptance = models.TextField("Критерии приёма работ для преподавателей", blank=True)
+
     class Meta:
         verbose_name = "Курс"
         verbose_name_plural = "Курсы"
@@ -40,7 +44,31 @@ class Problem(models.Model):
     time_limit = models.FloatField("Лимит секунд", default=2, validators=[MinValueValidator(.1), MaxValueValidator(10)])
     memory_mb = models.PositiveIntegerField("Память МБ", default=128, validators=[MinValueValidator(32), MaxValueValidator(512)])
 
+    kind = models.CharField("Тип задания", max_length=8, choices=[("code", "Программирование"), ("quiz", "Тест")], default="code")
+    solution_minutes = models.PositiveIntegerField("Время на решение, минут", null=True, blank=True, validators=[MinValueValidator(1)])
+    attempt_limit = models.PositiveIntegerField("Количество попыток", null=True, blank=True, validators=[MinValueValidator(1)])
+    allow_back = models.BooleanField("Возврат к предыдущим вопросам", default=True)
+    shuffle_options = models.BooleanField("Перемешивать варианты", default=False)
+    question_seconds = models.PositiveIntegerField("Время на каждый вопрос, секунд", null=True, blank=True, validators=[MinValueValidator(1)])
+    correct_threshold = models.PositiveIntegerField("Порог правильных ответов", default=1, validators=[MinValueValidator(1)])
+    quiz_questions = models.JSONField("Вопросы теста", default=list, blank=True,
+        help_text='JSON: [{"text":"Вопрос в Markdown", "options":["Ответ 1","Ответ 2"], "correct":[0]}]. Номера правильных вариантов начинаются с 0.')
+    check_mode = models.CharField("Проверка кода", max_length=8, choices=[("stdout", "STDOUT"), ("unit", "Unit-тесты")], default="stdout")
+    task_name = models.SlugField("Имя файлов задачи", default="task", max_length=50)
+    starter_header = models.TextField("Начальный task_name.h", blank=True, validators=[validate_utf8_size])
+    starter_implementation = models.TextField("Начальный task_name.cpp", blank=True, validators=[validate_utf8_size])
+    unit_tests = models.TextField("Закрытый main.cpp для unit-тестов", blank=True, validators=[validate_utf8_size])
+    format_policy = models.CharField("Форматирование", max_length=8, choices=[("off", "Выключено"), ("warning", "Замечание"), ("required", "Блокирует зачёт")], default="off")
+    static_policy = models.CharField("Статический анализ", max_length=8, choices=[("off", "Выключено"), ("warning", "Замечание"), ("required", "Блокирует зачёт")], default="off")
+    dynamic_policy = models.CharField("Динамический анализ", max_length=8, choices=[("off", "Выключено"), ("warning", "Замечание"), ("required", "Блокирует зачёт")], default="off")
+    format_style = models.CharField("Стиль clang-format", max_length=12, choices=[(v, v) for v in ("LLVM", "Google", "Mozilla", "WebKit", "Microsoft", "GNU")], default="LLVM")
+    diagnostic_policies = models.JSONField("Критичность отдельных диагностик", default=dict, blank=True,
+        help_text='Необязательные исключения: {"static:unusedVariable":"warning", "static:nullPointer":"required", "dynamic:undefined":"required"}. Значения warning или required; остальные диагностики используют политику инструмента.')
+    show_test_logs = models.BooleanField("Открыть студенту отчёт закрытых тестов", default=False)
+
     def clean(self):
+        from .task_validation import validate_problem
+        validate_problem(self)
         if self.time_limit is not None and not math.isfinite(self.time_limit):
             raise ValidationError({"time_limit": "Лимит должен быть конечным числом."})
 
@@ -82,10 +110,20 @@ class Assessment(models.Model):
     reveal_after_close = models.BooleanField("Раскрывать оценки после закрытия", default=False)
     current_version = models.ForeignKey("AssessmentVersion", null=True, blank=True, on_delete=models.PROTECT, related_name="+", editable=False)
 
+    grade_thresholds = models.JSONField("Пороги оценок", default=dict, blank=True, help_text='Необязательно, абсолютные баллы: {"3": 10, "4": 15, "5": 20}.')
+    task_workflow = models.BooleanField("Отдельные попытки и таймеры заданий", default=True)
+    linear = models.BooleanField("Выполнять задания по порядку", default=False)
+    requires_confirmation = models.BooleanField("Зачёт подтверждает преподаватель", default=False)
+    invited_students = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name="invited_assessments", verbose_name="Дополнительно допущенные студенты")
+
     def clean(self):
+        if self.grade_thresholds is None:
+            self.grade_thresholds = {}
+        if not isinstance(self.grade_thresholds, dict) or any(not isinstance(label, str) or not label.strip() or type(score) is not int or score < 0 for label, score in self.grade_thresholds.items()):
+            raise ValidationError({"grade_thresholds": "Задайте объект: оценка — неотрицательный целый порог баллов."})
         if self.opens_at and self.closes_at and self.closes_at <= self.opens_at:
             raise ValidationError("Закрытие должно быть позже открытия.")
-        if self.kind == self.Kind.EXAM and not self.duration_minutes:
+        if self.kind == self.Kind.EXAM and not self.task_workflow and not self.duration_minutes:
             raise ValidationError("Укажите продолжительность зачёта.")
 
     def __str__(self):
@@ -167,7 +205,11 @@ class Attempt(models.Model):
     assessment = models.ForeignKey(Assessment, on_delete=models.PROTECT, related_name="attempts")
     version = models.ForeignKey(AssessmentVersion, on_delete=models.PROTECT)
     started_at = models.DateTimeField()
-    deadline = models.DateTimeField()
+    deadline = models.DateTimeField(null=True, blank=True)
+    review_status = models.CharField(max_length=12, choices=[("pending", "Ожидает проверки"), ("accepted", "Зачтено"), ("revision", "На доработке")], blank=True)
+    teacher_comment = models.TextField(blank=True)
+    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name="reviewed_attempts")
+    reviewed_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -207,6 +249,7 @@ class Submission(models.Model):
         SAMPLE = "sample", "Примеры"
         JUDGE = "judge", "На проверку"
         CUSTOM = "custom", "Свой ввод"
+        BUILD = "build", "Сборка"
 
     class Status(models.TextChoices):
         QUEUED = "queued", "В очереди"
@@ -219,6 +262,8 @@ class Submission(models.Model):
         INFRA = "infra_error", "Ошибка инфраструктуры"
 
     attempt = models.ForeignKey(Attempt, on_delete=models.PROTECT, related_name="submissions")
+    task_attempt = models.ForeignKey("TaskAttempt", null=True, blank=True, on_delete=models.PROTECT, related_name="submissions")
+    files = models.JSONField(default=dict, blank=True)
     request_id = models.UUIDField(null=True, blank=True, editable=False)
     problem_id = models.PositiveBigIntegerField()
     source = models.TextField(max_length=65536)
@@ -313,3 +358,40 @@ class ReferenceCheck(models.Model):
     started_at = models.DateTimeField(null=True)
     finished_at = models.DateTimeField(null=True)
     result = models.JSONField(default=dict)
+
+
+class TaskAttempt(models.Model):
+    attempt = models.ForeignKey(Attempt, on_delete=models.PROTECT, related_name="task_attempts")
+    problem_id = models.PositiveBigIntegerField()
+    number = models.PositiveIntegerField()
+    started_at = models.DateTimeField(default=timezone.now)
+    deadline = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    files = models.JSONField(default=dict, blank=True)
+    answers = models.JSONField(default=dict, blank=True)
+    option_order = models.JSONField(default=dict, blank=True)
+    revision = models.PositiveIntegerField(default=0)
+    current_question = models.PositiveIntegerField(default=0)
+    question_started_at = models.DateTimeField(default=timezone.now)
+    status = models.CharField(max_length=20, default="active", choices=[("active", "Выполняется"), *Submission.Status.choices])
+    result = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["attempt", "problem_id", "number"], name="unique_task_attempt_number")]
+        ordering = ["pk"]
+
+
+class ExtraAttempt(models.Model):
+    attempt = models.ForeignKey(Attempt, on_delete=models.PROTECT, related_name="extra_attempts")
+    problem_id = models.PositiveBigIntegerField()
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    reason = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class ActivityEvent(models.Model):
+    attempt = models.ForeignKey(Attempt, on_delete=models.PROTECT, related_name="activity_events")
+    task_attempt = models.ForeignKey(TaskAttempt, null=True, blank=True, on_delete=models.PROTECT)
+    kind = models.CharField(max_length=16, choices=[("blur", "Потеря фокуса"), ("hidden", "Другая вкладка"), ("paste", "Вставка"), ("command", "Команда терминала")])
+    detail = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)

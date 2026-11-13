@@ -21,7 +21,7 @@ class PublicationTests(TestCase):
         self.student.groups.add(self.group)
         self.problem = Problem.objects.create(course=self.course, title="Sum", statement="Add two numbers.")
         now = timezone.now()
-        self.work = Assessment.objects.create(course=self.course,
+        self.work = Assessment.objects.create(task_workflow=False, course=self.course,
             title="Publication test", opens_at=now - timedelta(hours=1),
             closes_at=now + timedelta(hours=1),
         )

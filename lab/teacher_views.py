@@ -147,11 +147,11 @@ def gradebook(request, pk):
         for attempt in attempts:
             attempt.version = version
             summary = services.result_summary(attempt, submissions=attempt.submissions.all(), answers=attempt.answers.all())
-            status = "Завершена" if attempt.finished_at else "Срок истёк" if timezone.now() >= attempt.deadline else "В работе"
+            status = "Завершена" if attempt.finished_at else "Срок истёк" if attempt.deadline and timezone.now() >= attempt.deadline else "В работе"
             rows.append({"student": attempt.student, "attempt": attempt, "status": status, "summary": summary,
                          "ungraded": sum(q["score"] is None for q in summary["theory"])})
         if version.pk == work.current_version_id:
-            students = get_user_model().objects.filter(is_active=True, is_staff=False, groups__pk__in=version.snapshot["group_ids"])
+            students = get_user_model().objects.filter(Q(groups__pk__in=version.snapshot["group_ids"]) | Q(invited_assessments=work), is_active=True, is_staff=False)
             # One attempt per work: a student taking an old version cannot start the new one.
             students = students.exclude(pk__in=Attempt.objects.filter(assessment=work).values("student_id"))
             if group_id:
@@ -168,6 +168,8 @@ def gradebook(request, pk):
 def attempt(request, pk):
     item = get_object_or_404(scoped(request.user,
         Attempt.objects.select_related("student", "version", "assessment"), "assessment__course"), pk=pk)
+    if item.snapshot.get("task_workflow"):
+        return redirect("teacher_task_review", pk=pk)
     answers = {a.question_id: a for a in item.answers.select_related("submission", "graded_by").prefetch_related("grade_changes__actor")}
     extension_form = ExtensionForm(request.POST if request.method == "POST" and request.POST.get("action") == "extend" else None)
     error_status = 200

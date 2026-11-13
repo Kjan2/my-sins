@@ -43,8 +43,7 @@ def course_edit(request, pk=None):
     if request.method == "POST" and form.is_valid():
         with transaction.atomic():
             form.save()
-            if not pk:
-                course.teachers.add(request.user)
+            course.teachers.add(request.user)
         messages.success(request, "Курс сохранён.")
         return redirect("teacher_courses")
     return render(request, "teacher/course_form.html", {"form": form, "course": course},
@@ -57,9 +56,16 @@ def assessment_edit(request, pk=None):
     course = work.course if work else selected_course(request)
     if not course:
         return render(request, "teacher/select_course.html", {"courses": courses_for(request.user), "creating": "работы"})
-    work = work or Assessment(course=course, opens_at=timezone.now().replace(second=0, microsecond=0),
+    work = work or Assessment(course=course, task_workflow=True, opens_at=timezone.now().replace(second=0, microsecond=0),
                               closes_at=timezone.now().replace(second=0, microsecond=0) + timedelta(days=7))
     data = request.POST if request.method == "POST" else None
+    if data is not None and work.pk and work.attempts.exists():
+        # Migrating an in-progress legacy work changes its protocol; keep its mode.
+        data = data.copy()
+        if work.task_workflow:
+            data['task_workflow'] = 'on'
+        else:
+            data.pop('task_workflow', None)
     form = AssessmentForm(data, instance=work, course=course)
     rules = RuleFormSet(data, instance=work, prefix="rules", form_kwargs={"course": course})
     existing = {q.pk: q for q in work.questions.all()} if work.pk else {}
@@ -133,7 +139,7 @@ def problem_edit(request, pk=None):
         return render(request, "teacher/select_course.html", {"courses": courses_for(request.user), "creating": "задачи"})
     problem = problem or Problem(course=course)
     data = request.POST if request.method == "POST" else None
-    form = ProblemForm(data, instance=problem)
+    form = ProblemForm(data, request.FILES if request.method == "POST" else None, instance=problem)
     tests = TestFormSet(data, instance=problem, prefix="tests")
     form_valid = form.is_valid() if data is not None else False
     tests_valid = tests.is_valid() if data is not None else False

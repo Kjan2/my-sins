@@ -15,7 +15,7 @@ class AuthoringTests(TestCase):
         self.foreign_group = Group.objects.create(name="Foreign group")
         self.foreign_course = Course.objects.create(title="Foreign course")
         self.foreign_problem = Problem.objects.create(course=self.foreign_course, title="Foreign problem", statement="Private")
-        self.foreign_work = Assessment.objects.create(course=self.foreign_course, title="Foreign work",
+        self.foreign_work = Assessment.objects.create(task_workflow=False, course=self.foreign_course, title="Foreign work",
             opens_at=self.work.opens_at, closes_at=self.work.closes_at)
 
     def payload(self, *, editing=False):
@@ -161,7 +161,7 @@ class AuthoringTests(TestCase):
         self.assertContains(response, "&lt;script&gt;")
 
     def test_work_filters_are_scoped_and_searchable(self):
-        Assessment.objects.create(course=self.course, title="Черновик", opens_at=self.work.opens_at, closes_at=self.work.closes_at)
+        Assessment.objects.create(task_workflow=False, course=self.course, title="Черновик", opens_at=self.work.opens_at, closes_at=self.work.closes_at)
         self.assertContains(self.client.get("/teacher/?status=draft"), "Черновик")
         self.assertNotContains(self.client.get("/teacher/?status=draft"), ">Exam</a>")
         self.assertNotContains(self.client.get("/teacher/?q=Exam"), ">Черновик</a>")

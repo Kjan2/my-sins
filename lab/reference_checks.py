@@ -11,9 +11,13 @@ from .permissions import require_course
 
 
 def reference_payload(problem, tests=None):
-    return {"source": problem.reference_source, "image": settings.JUDGE_IMAGE,
+    from .tasks import CONFIG_FIELDS
+    payload = {**{name: getattr(problem, name) for name in CONFIG_FIELDS}, "source": problem.reference_source, "image": settings.JUDGE_IMAGE,
             "time_limit": problem.time_limit, "memory_mb": problem.memory_mb,
             "tests": tests if tests is not None else list(problem.tests.values("label", "input", "expected", "is_sample"))}
+    if problem.check_mode == "unit":
+        payload['files'] = {'main.cpp': problem.starter_code, problem.task_name + '.h': problem.starter_header, problem.task_name + '.cpp': problem.reference_source}
+    return payload
 
 
 def reference_fingerprint(payload):
@@ -29,7 +33,7 @@ def queue_reference_check(actor, problem_id):
     if not problem.reference_source.strip():
         raise ValidationError("Заполните эталонное решение.")
     tests = list(problem.tests.all())
-    if not tests or len(tests) > 100:
+    if (not tests and problem.check_mode != "unit") or len(tests) > 100:
         raise ValidationError("Для проверки нужно от 1 до 100 тестов.")
     for test in tests:
         test.full_clean()

@@ -98,3 +98,80 @@ if(access("/work/solution",W_OK)==0)return 2;std::cout<<42;}'''
         # An invalid image must fail closed; it cannot execute a local compiler.
         judge=DockerJudge("contest-image-does-not-exist:invalid",self.prefix)
         self.assertEqual(judge.judge("int main(){}",{"time_limit":1,"memory_mb":64,"tests":[{"label":"x","input":"","expected":"","is_sample":False}]},"judge")["status"],"infra_error")
+
+    def policy_problem(self, **kwargs):
+        return {"time_limit":.5, "memory_mb":128,
+                "tests":[{"label":"SECRET_LABEL","input":"","expected":"42","is_sample":False}], **kwargs}
+
+    def test_formatting_can_block_or_warn(self):
+        source = '#include <iostream>\nint main(){std::cout<<42;}'
+        for policy, verdict in [('required','wrong_answer'), ('warning','accepted')]:
+            result = self.judge.judge(source, self.policy_problem(format_policy=policy, format_style='LLVM'), 'judge')
+            self.assertEqual(result['status'], verdict, result)
+            self.assertFalse(result['result']['checks'][0]['passed'])
+
+    def test_static_analysis_can_block_or_warn(self):
+        source = '#include <iostream>\nint main(){int unused;std::cout<<42;}'
+        for policy, verdict in [('required','wrong_answer'), ('warning','accepted')]:
+            result = self.judge.judge(source, self.policy_problem(static_policy=policy), 'judge')
+            self.assertEqual(result['status'], verdict, result)
+            self.assertEqual(result['result']['checks'][0]['tool'], 'static')
+
+    def test_undefined_behavior_dynamic_analysis(self):
+        source = '#include <iostream>\nint main(){int x;std::cin>>x;volatile int y=x+1;std::cout<<42;}'
+        problem = self.policy_problem(dynamic_policy='required', tests=[{'label':'PRIVATE_LABEL','input':'2147483647','expected':'42','is_sample':False}])
+        result = self.judge.judge(source, problem, 'judge')
+        self.assertEqual(result['status'], 'wrong_answer', result)
+        self.assertFalse(result['result']['checks'][0]['passed'])
+        self.assertNotIn('2147483647', str(result))
+        self.assertNotIn('PRIVATE_LABEL', str(result))
+
+    def test_dynamic_analysis_accepts_correct_code(self):
+        result = self.judge.judge('#include <iostream>\nint main(){std::cout<<42;}', self.policy_problem(dynamic_policy='required'), 'judge')
+        self.assertEqual(result['status'], 'accepted', result)
+        self.assertTrue(result['result']['checks'][0]['passed'])
+
+    def test_unit_tests_use_private_main_and_student_implementation(self):
+        problem = self.policy_problem(check_mode='unit', task_name='sum',
+            unit_tests='#include "sum.h"\nint main(){return add(20,22)==42 ? 0 : 1;}')
+        files = {'main.cpp':'#include <iostream>\nint main(){std::cout<<99;}',
+                 'sum.cpp':'#include "sum.h"\nint add(int a,int b){return a+b;}', 'sum.h':'int add(int,int);'}
+        result = self.judge.judge(files['main.cpp'], problem, 'judge', files=files)
+        self.assertEqual(result['status'], 'accepted', result)
+        custom = self.judge.judge(files['main.cpp'], problem, 'custom', files=files)
+        self.assertEqual(custom['result']['samples'][0]['stdout'], '99')
+        files['sum.cpp'] = '#include "sum.h"\nint add(int,int){return 0;}'
+        wrong = self.judge.judge(files['main.cpp'], problem, 'judge', files=files)
+        self.assertEqual(wrong['status'], 'runtime_error')
+
+    def test_private_unit_source_is_absent_at_runtime_and_not_in_errors(self):
+        problem = self.policy_problem(check_mode='unit', task_name='task', unit_tests='#include "task.h"\nint PRIVATE_HARNESS_SECRET=7; int main(){return run();}')
+        files = {'main.cpp':'int main(){}', 'task.h':'int run();',
+                 'task.cpp':'#include <unistd.h>\nint run(){return access("/work/main.cpp",F_OK)==0 ? 1 : 0;}'}
+        result = self.judge.judge(files['main.cpp'], problem, 'judge', files=files)
+        self.assertEqual(result['status'], 'accepted', result)
+        files['task.cpp'] = 'not C++'
+        result = self.judge.judge(files['main.cpp'], problem, 'judge', files=files)
+        self.assertEqual(result['status'], 'compile_error')
+        self.assertNotIn('PRIVATE_HARNESS_SECRET', result['result']['compiler'])
+
+    def test_build_does_not_execute_program(self):
+        result = self.judge.judge('int main(){for(;;){}}', self.policy_problem(), 'build')
+        self.assertEqual(result['status'], 'accepted', result)
+
+    def test_static_diagnostic_override_can_make_one_error_advisory(self):
+        source = '#include <iostream>\nint main(){int unused;std::cout<<42;}'
+        problem = self.policy_problem(static_policy='required', diagnostic_policies={'static:unusedVariable':'warning'})
+        result = self.judge.judge(source, problem, 'judge')
+        self.assertEqual(result['status'], 'accepted', result)
+        check = result['result']['checks'][0]
+        self.assertFalse(check['blocking'])
+        self.assertEqual(check['diagnostics'][0]['id'], 'unusedVariable')
+
+    def test_dynamic_category_override_can_make_ub_advisory(self):
+        source = '#include <iostream>\nint main(){int x;std::cin>>x;volatile int y=x+1;std::cout<<42;}'
+        problem = self.policy_problem(dynamic_policy='required', diagnostic_policies={'dynamic:undefined':'warning'},
+            tests=[{'label':'hidden','input':'2147483647','expected':'42','is_sample':False}])
+        result = self.judge.judge(source, problem, 'judge')
+        self.assertEqual(result['status'], 'accepted', result)
+        self.assertEqual(result['result']['checks'][0]['diagnostics'][0]['id'], 'undefined')

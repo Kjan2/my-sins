@@ -4,8 +4,20 @@ from django.urls import path
 from lab import views
 from lab import teacher_views
 from lab import management_views
+from lab import task_views
 
 urlpatterns = [
+    path("attempts/<int:pk>/activity/", task_views.work_event, name="work_event"),
+    path("courses/<int:course_id>/", views.dashboard, name="student_course"),
+    path("teacher/attempts/<int:pk>/events/", task_views.activity_events, name="teacher_task_events"),
+    path("attempts/<int:pk>/tasks/", task_views.work, name="task_work"),
+    path("attempts/<int:pk>/tasks/<int:problem_id>/start/", task_views.task_rules, name="task_rules"),
+    path("tasks/<int:pk>/", task_views.task_attempt, name="task_attempt"),
+    path("tasks/<int:pk>/action/", task_views.task_action, name="task_action"),
+    path("tasks/<int:pk>/state/", task_views.task_poll, name="task_poll"),
+    path("submissions/<int:pk>/log/", task_views.download_log, name="download_log"),
+    path("teacher/attempts/<int:pk>/review/", task_views.review_work, name="teacher_task_review"),
+    path("teacher/assessments/<int:pk>/invite/", task_views.invite_student, name="teacher_invite"),
     path("teacher/", teacher_views.dashboard, name="teacher_dashboard"),
     path("teacher/courses/", management_views.courses, name="teacher_courses"),
     path("teacher/courses/new/", management_views.course_edit, name="teacher_course_create"),

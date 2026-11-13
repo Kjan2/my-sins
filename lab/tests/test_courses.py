@@ -35,7 +35,7 @@ class CourseAccessTests(TestCase):
             statement="FOREIGN_STATEMENT", reference_source="int main(){}")
         Case.objects.create(problem=self.foreign_problem, label="hidden", expected="0")
         now = timezone.now()
-        self.foreign_work = Assessment.objects.create(course=self.foreign_course, title="FOREIGN_WORK",
+        self.foreign_work = Assessment.objects.create(task_workflow=False, course=self.foreign_course, title="FOREIGN_WORK",
             opens_at=now-timedelta(hours=1), closes_at=now+timedelta(hours=1))
         self.foreign_work.groups.add(self.foreign_group)
         AssessmentProblem.objects.create(assessment=self.foreign_work, problem=self.foreign_problem)
@@ -260,7 +260,7 @@ class CourseMigrationTests(TransactionTestCase):
     def test_existing_publication_and_attempt_survive_migration(self):
         executor = MigrationExecutor(connection)
         executor.migrate([("lab", "0004_project_improvements")])
-        self.addCleanup(lambda: MigrationExecutor(connection).migrate([("lab", "0005_courses")]))
+        self.addCleanup(lambda: MigrationExecutor(connection).migrate(MigrationExecutor(connection).loader.graph.leaf_nodes()))
         old = executor.loader.project_state([("lab", "0004_project_improvements")]).apps
         UserModel = old.get_model("auth", "User")
         teacher = UserModel.objects.create(username="old-teacher", is_staff=True, is_active=True)
@@ -279,10 +279,11 @@ class CourseMigrationTests(TransactionTestCase):
             version=version, started_at=now, deadline=now+timedelta(minutes=30))
         executor = MigrationExecutor(connection)
         executor.migrate([("lab", "0005_courses")])
-        migrated = Assessment.objects.get(pk=work.pk)
+        current = executor.loader.project_state([("lab", "0005_courses")]).apps
+        migrated = current.get_model("lab", "Assessment").objects.get(pk=work.pk)
         self.assertEqual(migrated.current_version.snapshot, snapshot)
         self.assertEqual(migrated.attempts.get().pk, attempt.pk)
         self.assertEqual(migrated.attempts.get().deadline, attempt.deadline)
-        self.assertEqual(Problem.objects.get(pk=problem.pk).course_id, migrated.course_id)
+        self.assertEqual(current.get_model("lab", "Problem").objects.get(pk=problem.pk).course_id, migrated.course_id)
         self.assertEqual(list(migrated.course.teachers.values_list("pk", flat=True)), [teacher.pk])
         self.assertEqual(list(migrated.course.groups.values_list("pk", flat=True)), [group.pk])

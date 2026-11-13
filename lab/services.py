@@ -64,7 +64,9 @@ def mutable_attempt(user, pk):
     attempt = accessible_attempt(user, pk)
     if attempt.student_id != user.pk:
         raise PermissionDenied
-    if attempt.finished_at or timezone.now() >= attempt.deadline:
+    if attempt.snapshot.get("task_workflow"):
+        raise ValidationError("Выполняйте сохранение и отправку через отдельную попытку задания.")
+    if attempt.finished_at or (attempt.deadline and timezone.now() >= attempt.deadline):
         raise Closed("Время работы истекло или работа уже завершена.")
     return attempt
 
@@ -78,22 +80,25 @@ def make_snapshot(assessment):
         rule.full_clean()
         p = rule.problem
         p.full_clean()
+        if not assessment.task_workflow and (p.kind == "quiz" or p.check_mode == "unit"):
+            raise ValidationError("Тесты с вариантами и unit-задачи доступны в новом режиме. Создайте новую работу для этого состава.")
         tests = []
         for t in p.tests.all():
             t.full_clean()
             tests.append({"label": t.label, "input": t.input, "expected": t.expected, "is_sample": t.is_sample})
         if len(tests) > 100:
             raise ValidationError(f"Задача «{p.title}»: допускается не больше 100 тестов.")
-        if not any(not t["is_sample"] for t in tests):
+        if p.kind != "quiz" and p.check_mode != "unit" and not any(not t["is_sample"] for t in tests):
             raise ValidationError(f"Задача «{p.title}»: добавьте хотя бы один скрытый тест с вводом и ожидаемым ответом в карточке задачи.")
-        if p.reference_source:
+        if p.reference_source and p.kind != "quiz":
             from .reference_checks import reference_fingerprint, reference_payload
             fingerprint = reference_fingerprint(reference_payload(p, tests))
             check = p.reference_checks.filter(fingerprint=fingerprint).order_by("-pk").first()
             if not check or check.status != "accepted":
                 raise ValidationError(f"Задача «{p.title}»: сначала успешно проверьте эталон на текущих тестах и лимитах.")
         validate_source(p.starter_code)
-        problems.append({"id": p.pk, "title": p.title, "statement": p.statement,
+        from .tasks import CONFIG_FIELDS
+        problems.append({**{name: getattr(p, name) for name in CONFIG_FIELDS}, "id": p.pk, "title": p.title, "statement": p.statement,
                          "statement_format": p.statement_format, "input_description": p.input_description,
                          "output_description": p.output_description, "constraints": p.constraints,
                          "starter_code": p.starter_code, "time_limit": p.time_limit,
@@ -104,13 +109,18 @@ def make_snapshot(assessment):
     for q in assessment.questions.order_by("pk"):
         q.full_clean()
         questions.append({"id": q.pk, "text": q.text, "problem_id": q.problem_id, "max_score": q.max_score, "source": q.source})
+    if assessment.task_workflow and questions:
+        raise ValidationError("В новом режиме добавьте вопросы как задание типа «Тест», затем удалите прежние вопросы теории.")
     total = sum(p["max_score"] for p in problems) + sum(q["max_score"] for q in questions)
+    if any(score > total for score in assessment.grade_thresholds.values()):
+        raise ValidationError("Порог оценки больше суммы максимальных баллов.")
     if assessment.pass_score > total:
         raise ValidationError("Проходной балл больше суммы максимальных баллов.")
     return {"problems": problems, "questions": questions, "title": assessment.title, "kind": assessment.kind,
             "instructions": assessment.instructions, "group_ids": list(assessment.groups.values_list("pk", flat=True)),
             "opens_at": assessment.opens_at.isoformat(), "closes_at": assessment.closes_at.isoformat(),
             "duration_minutes": assessment.duration_minutes, "pass_score": assessment.pass_score,
+            "task_workflow": assessment.task_workflow, "linear": assessment.linear, "requires_confirmation": assessment.requires_confirmation, "grade_thresholds": assessment.grade_thresholds,
             "submission_limit": assessment.submission_limit, "reveal_after_close": assessment.reveal_after_close}
 
 
@@ -135,15 +145,17 @@ def start_attempt(user, assessment_id):
         return old
     assessment = Assessment.objects.select_related("current_version").get(pk=assessment_id, current_version__isnull=False)
     snapshot = assessment.current_version.snapshot
-    if not enrolled(user, snapshot, assessment.course_id):
+    if not enrolled(user, snapshot, assessment.course_id) and not assessment.invited_students.filter(pk=user.pk).exists():
         raise PermissionDenied
     now = timezone.now()
     closes = parse_datetime(snapshot["closes_at"])
     if not parse_datetime(snapshot["opens_at"]) <= now < closes:
         raise Closed("Работа сейчас недоступна.")
     deadline = closes
-    if snapshot["duration_minutes"]:
-        deadline = min(deadline, now + timedelta(minutes=snapshot["duration_minutes"]))
+    if snapshot.get("task_workflow"):
+        deadline = None
+    elif snapshot["duration_minutes"]:
+        deadline = now + timedelta(minutes=snapshot["duration_minutes"])
     attempt = Attempt.objects.create(student=user, assessment=assessment, version=assessment.current_version, started_at=now, deadline=deadline)
     # Empty answers also need an explicit manual grade when the attempt closes.
     TheoryAnswer.objects.bulk_create([TheoryAnswer(attempt=attempt, question_id=q["id"]) for q in snapshot["questions"]])
@@ -220,12 +232,14 @@ def submit_code(user, attempt_id, problem_id, source, kind, custom_input=None, *
         raise ValidationError("Открытых примеров нет.")
     if Submission.objects.filter(attempt__student=user, status__in=["queued", "running"]).count() >= 3:
         raise ValidationError("У вас уже три задания в очереди. Дождитесь результата.")
+    if attempt.snapshot.get("task_workflow"):
+        raise ValidationError("Используйте отдельную попытку задания.")
     limit = attempt.snapshot["submission_limit"]
-    if kind == "judge" and limit and attempt.submissions.filter(problem_id=problem["id"], kind="judge").count() >= limit:
+    if kind == "judge" and limit and attempt.submissions.filter(problem_id=problem["id"], kind="judge").exclude(status="infra_error").count() >= limit:
         raise ValidationError("Достигнут лимит оцениваемых отправок по задаче.")
     save_draft(user, attempt_id, problem["id"], source, expected_revision)
     accepted_at = timezone.now()
-    if accepted_at >= attempt.deadline:
+    if attempt.deadline and accepted_at >= attempt.deadline:
         raise Closed("Время работы истекло.")
     return Submission.objects.create(attempt=attempt, problem_id=problem["id"], source=source, kind=kind,
                                      custom_input=custom_input or "", created_at=accepted_at, request_id=request_id)
@@ -295,9 +309,11 @@ def extend_deadline(actor, attempt_id, new_deadline, reason):
     teacher(actor)
     attempt = Attempt.objects.get(pk=attempt_id)
     require_course(actor, attempt.assessment.course_id)
+    if attempt.snapshot.get("task_workflow"):
+        raise ValidationError("Продление общего срока доступно для работ прежнего режима.")
     if attempt.finished_at:
         raise ValidationError("Нельзя продлить досрочно завершенную работу.")
-    if new_deadline <= attempt.deadline or new_deadline <= timezone.now() or not reason.strip():
+    if (attempt.deadline and new_deadline <= attempt.deadline) or new_deadline <= timezone.now() or not reason.strip():
         raise ValidationError("Укажите будущий срок позже текущего и причину.")
     DeadlineExtension.objects.create(attempt=attempt, actor=actor, old_deadline=attempt.deadline, new_deadline=new_deadline, reason=reason.strip())
     attempt.deadline = new_deadline
@@ -336,19 +352,24 @@ def results_visible(user, attempt, now=None):
 
 
 def result_summary(attempt, *, submissions=None, answers=None):
-    submissions = list(attempt.submissions.filter(kind="judge").only("problem_id", "status")) if submissions is None else [s for s in submissions if s.kind == "judge"]
+    if attempt.snapshot.get("task_workflow"):
+        from .tasks import summary
+        return summary(attempt)
+    submissions = list(attempt.submissions.filter(kind="judge").only("problem_id", "status", "pk")) if submissions is None else [s for s in submissions if s.kind == "judge"]
     answers = {a.question_id: a for a in (attempt.answers.all() if answers is None else answers)}
     problems = []
     required_ok = True
     for p in attempt.snapshot["problems"]:
-        accepted = any(s.problem_id == p["id"] and s.status == "accepted" for s in submissions)
+        finished = [s for s in submissions if s.problem_id == p["id"] and s.status not in ("queued", "running", "infra_error")]
+        last = max(finished, key=lambda s: s.pk, default=None)
+        accepted = bool(last and last.status == "accepted")
         problems.append({"id": p["id"], "title": p["title"], "score": p["max_score"] if accepted else 0, "max_score": p["max_score"], "required": p["required"], "accepted": accepted})
         if p["required"] and not accepted:
             required_ok = False
     theory = [{"text": q["text"], "score": answers[q["id"]].score if q["id"] in answers else None, "feedback": answers[q["id"]].feedback if q["id"] in answers else "", "max_score": q["max_score"]} for q in attempt.snapshot["questions"]]
     score = sum(p["score"] for p in problems) + sum(q["score"] or 0 for q in theory)
     pending = any(s.status in ("queued", "running", "infra_error") for s in submissions) or any(q["score"] is None for q in theory)
-    active = not attempt.finished_at and timezone.now() < attempt.deadline
+    active = not attempt.finished_at and (not attempt.deadline or timezone.now() < attempt.deadline)
     return {"problems": problems, "theory": theory, "score": score, "maximum": sum(p["max_score"] for p in problems) + sum(q["max_score"] for q in theory), "provisional": pending or active, "passed": score >= attempt.snapshot["pass_score"] and required_ok, "pass_score": attempt.snapshot["pass_score"], "required_ok": required_ok}
 
 
@@ -356,6 +377,9 @@ def result_summary(attempt, *, submissions=None, answers=None):
 def claim_submission():
     item = Submission.objects.select_related("attempt__version").filter(status="queued").order_by("created_at", "pk").first()
     if item:
+        if item.task_attempt_id:
+            from .models import TaskAttempt
+            TaskAttempt.objects.filter(pk=item.task_attempt_id).update(status="running")
         item.status, item.started_at = "running", timezone.now()
         item.save(update_fields=["status", "started_at"])
     return item
@@ -370,6 +394,9 @@ def requeue_submission(actor, submission_id):
         raise ValidationError("Повторная проверка доступна только после ошибки инфраструктуры.")
     if Submission.objects.filter(attempt__student_id=item.attempt.student_id, status__in=["queued", "running"]).count() >= 3:
         raise ValidationError("Очередь студента заполнена.")
+    if item.task_attempt_id:
+        from .models import TaskAttempt
+        TaskAttempt.objects.filter(pk=item.task_attempt_id).update(status="queued", result={})
     item.status, item.started_at, item.finished_at, item.result = "queued", None, None, {}
     item.save(update_fields=["status", "started_at", "finished_at", "result"])
     return item

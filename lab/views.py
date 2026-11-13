@@ -9,7 +9,9 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_POST
 from . import services
-from .models import Assessment, Attempt, Draft, Submission
+from .models import Assessment, Attempt, Course, Draft, Submission
+from django.db.models import Q
+from .problem_content import render_text
 from .problem_content import problem_sections
 
 DEFAULT_SOURCE = '#include <iostream>\nusing namespace std;\n\nint main() {\n    return 0;\n}\n'
@@ -18,9 +20,10 @@ SUBMISSION_META = ("id", "problem_id", "kind", "created_at", "status")
 
 def task_progress(user, item):
     drafted = set(Draft.objects.filter(attempt=item).values_list("problem_id", flat=True))
-    judged = list(item.submissions.filter(kind="judge").values_list("problem_id", "status"))
+    judged = list(item.submissions.filter(kind="judge").order_by("pk").values_list("problem_id", "status"))
+    completed = {pk: status for pk, status in judged if status not in ("queued", "running", "infra_error")}
     visible = services.results_visible(user, item)
-    return {str(p["id"]): "Принято" if visible and (p["id"], "accepted") in judged else
+    return {str(p["id"]): "Принято" if visible and completed.get(p["id"]) == "accepted" else
             "Отправлено" if any(pk == p["id"] for pk, _ in judged) else
             "Есть черновик" if p["id"] in drafted else "Нет отправок" for p in item.snapshot["problems"]}
 
@@ -33,14 +36,23 @@ def owned(user, pk):
 
 
 def public_submission(user, item, attempt, *, include_result=True):
-    visible = item.kind in ("sample", "custom") or services.results_visible(user, attempt)
+    visible = item.kind in ("sample", "custom", "build") or services.results_visible(user, attempt)
     data = {"id": item.pk, "problem_id": item.problem_id, "kind": item.get_kind_display(), "kind_code": item.kind,
             "problem_title": services.problem_for(attempt, item.problem_id)["title"],
             "created_at": item.created_at.isoformat(), "status": item.status if visible else "received",
             "status_label": item.get_status_display() if visible else "Отправка принята"}
     if include_result:
-        data["result"] = item.result if visible else {}
+        result = dict(item.result) if visible else {}
+        if not user.is_staff:
+            result.pop('private_compiler', None)
+        if not user.is_staff and item.kind == 'judge':
+            p = services.problem_for(attempt, item.problem_id)
+            if not p.get('show_test_logs'):
+                result.pop('tests', None)
+                result.pop('test_report', None)
+        data["result"] = result
         data["source"] = item.source
+        data["files"] = item.files
         if item.kind == "custom":
             data["custom_input"] = item.custom_input
     if item.kind == "custom" and item.status == "accepted":
@@ -49,8 +61,8 @@ def public_submission(user, item, attempt, *, include_result=True):
 
 
 def clock_data(item):
-    return {"server_now": timezone.now().isoformat(), "deadline": item.deadline.isoformat(),
-            "closed": bool(item.finished_at or timezone.now() >= item.deadline)}
+    return {"server_now": timezone.now().isoformat(), "deadline": item.deadline.isoformat() if item.deadline else None,
+            "closed": bool(item.finished_at or (item.deadline and timezone.now() >= item.deadline))}
 
 
 def json_body(request):
@@ -74,20 +86,33 @@ def expected_revision(data):
 
 
 @login_required
-def dashboard(request):
+def dashboard(request, course_id=None):
     attempts = {a.assessment_id: a for a in Attempt.objects.filter(student=request.user).select_related("version")}
     rows = []
     for work in Assessment.objects.select_related("current_version", "course").order_by("-pk"):
         old = attempts.get(work.pk)
         version = old.version if old else work.current_version
-        if not version or (not old and not services.enrolled(request.user, version.snapshot, work.course_id)):
+        if not version or (not old and not services.enrolled(request.user, version.snapshot, work.course_id) and not work.invited_students.filter(pk=request.user.pk).exists()):
             continue
         s = version.snapshot
         now = timezone.now()
         available = parse_datetime(s["opens_at"]) <= now < parse_datetime(s["closes_at"])
-        status = ("Завершена" if old.finished_at else "Срок истёк" if now >= old.deadline else "В работе") if old else ("Можно начать" if available else "Ещё не открыта" if now < parse_datetime(s["opens_at"]) else "Закрыта")
-        rows.append({"id": work.pk, "title": s["title"], "course": work.course.title, "kind": "Зачёт" if s["kind"] == "exam" else "Лабораторная", "opens_at": parse_datetime(s["opens_at"]), "closes_at": parse_datetime(s["closes_at"]), "attempt": old, "available": available, "status": status})
-    return render(request, "lab/dashboard.html", {"rows": rows})
+        status = ("Завершена" if old.finished_at else "Срок истёк" if (old.deadline and now >= old.deadline) else "В работе") if old else ("Можно начать" if available else "Ещё не открыта" if now < parse_datetime(s["opens_at"]) else "Закрыта")
+        rows.append({"id": work.pk, "title": s["title"], "course": work.course.title, "course_id": work.course_id, "kind": "Зачёт" if s["kind"] == "exam" else "Лабораторная", "opens_at": parse_datetime(s["opens_at"]), "closes_at": parse_datetime(s["closes_at"]), "attempt": old, "available": available, "status": status})
+    allowed_courses = Course.objects.filter(Q(groups__user=request.user) | Q(teachers=request.user) |
+        Q(assessments__invited_students=request.user) | Q(assessments__attempts__student=request.user)).distinct()
+    if request.user.is_superuser:
+        allowed_courses = Course.objects.all()
+    course = get_object_or_404(allowed_courses, pk=course_id) if course_id else None
+    course_rows = []
+    for c in allowed_courses:
+        works = [row for row in rows if row['course_id'] == c.pk]
+        deadlines = [row['closes_at'] for row in works if row['closes_at'] >= timezone.now()]
+        course_rows.append({'item': c, 'deadline': min(deadlines) if deadlines else None, 'works': works})
+    return render(request, "lab/dashboard.html", {"rows": [r for r in rows if r['course_id'] == course.pk] if course else rows,
+        'courses': course_rows, 'selected_course': course,
+        'description': render_text(course.description, 'markdown') if course else '',
+        'faq': render_text(course.faq, 'markdown') if course else ''})
 
 
 @login_required
@@ -97,7 +122,7 @@ def rules(request, pk):
     if old:
         return redirect("attempt", pk=old.pk)
     s = work.current_version.snapshot
-    if not services.enrolled(request.user, s, work.course_id):
+    if not services.enrolled(request.user, s, work.course_id) and not work.invited_students.filter(pk=request.user.pk).exists():
         from django.core.exceptions import PermissionDenied
         raise PermissionDenied
     return render(request, "lab/rules.html", {"work_id": work.pk, "title": s["title"], "instructions": s["instructions"], "duration": s["duration_minutes"], "opens_at": parse_datetime(s["opens_at"]), "closes_at": parse_datetime(s["closes_at"]), "pass_score": s["pass_score"], "limit": s["submission_limit"], "deferred": s["reveal_after_close"], "version": work.current_version.number})
@@ -119,6 +144,8 @@ def start(request, pk):
 @login_required
 def attempt(request, pk):
     item = owned(request.user, pk)
+    if item.snapshot.get("task_workflow"):
+        return redirect("task_work", pk=pk)
     draft_objects = {d.problem_id: d for d in Draft.objects.filter(attempt=item)}
     drafts = {pk: d.source for pk, d in draft_objects.items()}
     answers = {a.question_id: a for a in item.answers.all()}
@@ -137,7 +164,7 @@ def attempt(request, pk):
     for p in problems:
         p["progress"] = progress[str(p["id"])]
     questions = [{"id": q["id"], "text": q["text"], "max_score": q["max_score"], "answer": answers.get(q["id"]), "submissions": [{"id": s["id"]} for s in linked_submissions if s["problem_id"] == q["problem_id"]], "problem_id": q["problem_id"], "linked": bool(q["problem_id"])} for q in item.snapshot["questions"]]
-    active = not item.finished_at and timezone.now() < item.deadline and item.student_id == request.user.pk
+    active = not item.finished_at and (not item.deadline or timezone.now() < item.deadline) and item.student_id == request.user.pk
     return render(request, "lab/attempt.html", {"attempt_id": pk, "title": item.snapshot["title"], "instructions": item.snapshot["instructions"], "version": item.version.number, "problems": problems, "questions": questions, "latest_judged": latest_judged, "results_visible": services.results_visible(request.user, item), "submissions": [public_submission(request.user, s, item, include_result=False) for s in submissions[:50]], "active": active, "can_edit": not item.finished_at and item.student_id == request.user.pk, "clock": clock_data(item)})
 
 
@@ -230,11 +257,14 @@ def submission_state(request, pk):
 def submission(request, pk):
     item = get_object_or_404(Submission.objects.select_related("attempt__version"), pk=pk)
     attempt = owned(request.user, item.attempt_id)
-    return render(request, "lab/submission.html", {"item": public_submission(request.user, item, attempt), "source": item.source, "attempt_id": attempt.pk, "pending": item.status in ("queued", "running") and (item.kind in ("sample", "custom") or services.results_visible(request.user, attempt))})
+    return render(request, "lab/submission.html", {"item": public_submission(request.user, item, attempt), "source": item.source, "attempt_id": attempt.pk, "pending": item.status in ("queued", "running") and (item.kind in ("sample", "custom", "build") or services.results_visible(request.user, attempt))})
 
 
 @login_required
 def results(request, pk):
     item = owned(request.user, pk)
+    if item.snapshot.get("task_workflow"):
+        from .tasks import expire_tasks
+        expire_tasks(item)
     visible = services.results_visible(request.user, item)
     return render(request, "lab/results.html", {"attempt_id": pk, "title": item.snapshot["title"], "version": item.version.number, "visible": visible, "reveal_at": parse_datetime(item.snapshot["closes_at"]), "summary": services.result_summary(item) if visible else None})

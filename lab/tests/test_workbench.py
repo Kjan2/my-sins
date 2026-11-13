@@ -37,7 +37,7 @@ class WorkbenchTests(TestCase):
         self.course.groups.add(group)
         self.student.groups.add(group)
         now = timezone.now()
-        self.work = Assessment.objects.create(course=self.course, title="Workbench", opens_at=now-timedelta(hours=1), closes_at=now+timedelta(hours=2))
+        self.work = Assessment.objects.create(task_workflow=False, course=self.course, title="Workbench", opens_at=now-timedelta(hours=1), closes_at=now+timedelta(hours=2))
         self.work.groups.add(group)
         self.problems = []
         for title in ["Sum", "Maximum"]:

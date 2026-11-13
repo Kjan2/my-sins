@@ -6,7 +6,8 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 from judge.docker_runner import DockerJudge, InfrastructureError
-from lab.models import Submission, ReferenceCheck
+from lab.models import Submission, ReferenceCheck, TaskAttempt
+from lab.tasks import expire_tasks, record_outcome
 from lab.services import claim_submission, problem_for
 from lab.reference_checks import claim_reference_check
 from lab.worker_monitor import WorkerMonitor
@@ -48,10 +49,12 @@ class Command(BaseCommand):
         try:
             monitor.start()
             Submission.objects.filter(status="running").update(status="infra_error", finished_at=timezone.now(), result={"message": "Предыдущая проверка прервана. Требуется повторная проверка преподавателем."})
+            TaskAttempt.objects.filter(status="running").update(status="infra_error")
             ReferenceCheck.objects.filter(status="running").update(status="infra_error", finished_at=timezone.now(), result={"message": "Проверка прервана. Запустите эталон снова."})
             judge.cleanup_stale()
             monitor.update("idle")
             while True:
+                expire_tasks()
                 current = claim_submission() or claim_reference_check()
                 if current is None:
                     if once:
@@ -67,11 +70,17 @@ class Command(BaseCommand):
                         if current.payload.get("image") != settings.JUDGE_IMAGE:
                             outcome = {"status": "infra_error", "result": {"message": "Образ проверки изменился. Запустите эталон заново."}}
                         else:
-                            outcome = judge.judge(current.payload["source"], current.payload, "judge")
+                            kwargs = {"files": current.payload["files"]} if current.payload.get("files") else {}
+                            outcome = judge.judge(current.payload["source"], current.payload, "judge", **kwargs)
                     else:
-                        outcome = judge.judge(current.source, problem_for(current.attempt, current.problem_id), current.kind,
-                                              custom_input=current.custom_input)
-                    type(current).objects.filter(pk=current.pk, status="running").update(**outcome, finished_at=timezone.now())
+                        kwargs = {"custom_input": current.custom_input}
+                        if current.files:
+                            kwargs["files"] = current.files
+                        outcome = judge.judge(current.source, problem_for(current.attempt, current.problem_id), current.kind, **kwargs)
+                    if reference:
+                        type(current).objects.filter(pk=current.pk, status="running").update(**outcome, finished_at=timezone.now())
+                    else:
+                        record_outcome(current, outcome)
                     logger.info("Judge completed type=%s id=%s status=%s", type(current).__name__, current.pk, outcome["status"])
                     monitor.update("idle")
                     current = None
@@ -81,6 +90,8 @@ class Command(BaseCommand):
                     failed = "Ошибка проверяющего процесса. Требуется проверка журнала worker."
                     logger.exception("Unexpected judge failure on submission %s", current.pk)
                     type(current).objects.filter(pk=current.pk, status="running").update(status="infra_error", result={"message": "Ошибка проверяющего процесса. Требуется повторная проверка."}, finished_at=timezone.now())
+                    if isinstance(current, Submission) and current.task_attempt_id:
+                        TaskAttempt.objects.filter(pk=current.task_attempt_id).update(status="infra_error")
                     current = None
                     raise CommandError("Unexpected judge failure; worker stopped safely.")
                 if once:
@@ -102,6 +113,8 @@ class Command(BaseCommand):
                 try:
                     if current:
                         type(current).objects.filter(pk=current.pk, status="running").update(status="infra_error", result={"message": "Проверка прервана. Требуется повторная проверка преподавателем."}, finished_at=timezone.now())
+                        if isinstance(current, Submission) and current.task_attempt_id:
+                            TaskAttempt.objects.filter(pk=current.task_attempt_id).update(status="infra_error")
                 finally:
                     judge.cleanup_stale()
             except InfrastructureError:

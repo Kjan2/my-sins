@@ -67,11 +67,12 @@ async function teacherPage(mobile=false) {
   page.on("pageerror", error => errors.push(error.message));
   return {page, context, errors};
 }
-test("teacher creates, saves and publishes a work with a linked question through the cabinet", async () => {
+test("teacher creates, saves and publishes a legacy work with a linked question through the cabinet", async () => {
   const {page,context,errors}=await teacherPage();
   try {
     await page.goto(origin+"/teacher/");
     await page.getByRole("link",{name:"+ Создать работу"}).click();
+    await page.locator('[name="task_workflow"]').evaluate(input => { input.value = ""; });
     await page.locator('[name="title"]').fill("Лабораторная №3 · Ветвления");
     await page.locator('[name="instructions"]').fill("Решите задачу и объясните выбор целочисленного типа.");
     await page.locator('[name="pass_score"]').fill("10");

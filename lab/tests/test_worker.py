@@ -29,7 +29,7 @@ class WorkerTests(TransactionTestCase):
         p=Problem.objects.create(course=self.course, title="p",statement="s")
         TestCase.objects.create(problem=p,label="hidden",expected="0")
         now=timezone.now()
-        work=Assessment.objects.create(course=self.course, title="work",opens_at=now-timedelta(hours=1),closes_at=now+timedelta(hours=1))
+        work=Assessment.objects.create(task_workflow=False, course=self.course, title="work",opens_at=now-timedelta(hours=1),closes_at=now+timedelta(hours=1))
         work.groups.add(group)
         AssessmentProblem.objects.create(assessment=work,problem=p)
         services.publish_assessment(user,work.pk)
